@@ -1312,11 +1312,13 @@ impl HudAtlas {
         Ok(atlas)
     }
     /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens and
-    /// `textures/font` sheets, packed into the same atlas the HUD draws from. Its screens are
-    /// looked up by their era path (`blit_rect("gui/icons")`), and the font is the bitmap one
+    /// `textures/font` sheets, packed into the same atlas the HUD draws from, plus the
+    /// `textures/entity` sheets the mob pass reads. Its screens are looked up by their era
+    /// path (`blit_rect("gui/icons")`), and the font is the bitmap one
     /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
     pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
-        let mut atlas = Self::pack(root, defaults, &["gui", "font"], false, false)?;
+        let mut atlas = Self::pack(root, defaults, &["gui", "font", "entity"], false, false)?;
+        crate::sunset17_assets::alias_entity_textures(&mut atlas.sprites);
         pack_text::load_shaders(&mut atlas, root, root);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
             root,

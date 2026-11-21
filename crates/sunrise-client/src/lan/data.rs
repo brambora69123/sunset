@@ -208,8 +208,9 @@ pub fn era_builtin(root: &Path) -> Builtin {
         names
     };
     // The entities the era's game sends: the era's own `EntityList` names
-    // under the engine's, as far as the engine names a type without
-    // `entity-types.json`.
+    // under the engine's, plus every living type the era's `entity-types.json`
+    // names (the mobs `entity-models.json` gives models), sorted after the
+    // fixed ones so their ids stay put.
     const ENTITY_TYPES: [&str; 13] = [
         "minecraft:player",
         "minecraft:item",
@@ -225,6 +226,12 @@ pub fn era_builtin(root: &Path) -> Builtin {
         "minecraft:tnt",
         "minecraft:falling_block",
     ];
+    let mut entities: Vec<String> = ENTITY_TYPES.iter().map(|id| (*id).to_owned()).collect();
+    for id in names(&read("entity-types.json")) {
+        if !entities.contains(&id) {
+            entities.push(id);
+        }
+    }
     let mut registries = HashMap::new();
     registries.insert(
         "minecraft:item".into(),
@@ -236,7 +243,7 @@ pub fn era_builtin(root: &Path) -> Builtin {
     );
     registries.insert(
         "minecraft:entity_type".into(),
-        Ids::from_names(ENTITY_TYPES.iter().map(|id| (*id).to_owned()).collect()),
+        Ids::from_names(entities.clone()),
     );
     registries.insert(
         "minecraft:attribute".into(),
@@ -253,7 +260,7 @@ pub fn era_builtin(root: &Path) -> Builtin {
          types, sounds, particles and menus are empty",
         registries["minecraft:item"].names.len(),
         registries["minecraft:block"].names.len(),
-        ENTITY_TYPES.len(),
+        entities.len(),
         crate::motion::ERA_PLAYER_ATTRIBUTES.len(),
     );
     Builtin { registries }
@@ -1409,6 +1416,11 @@ mod tests {
             br#"{"defaults":{"minecraft:stone":1,"minecraft:air":0},"states":[]}"#,
         )
         .unwrap();
+        std::fs::write(
+            root.path().join("entity-types.json"),
+            br#"{"minecraft:pig":{},"minecraft:zombie":{}}"#,
+        )
+        .unwrap();
         let builtin = era_builtin(root.path());
         let item = builtin.get("minecraft:item").unwrap();
         assert_eq!(item.id("minecraft:air"), Some(0));
@@ -1416,13 +1428,13 @@ mod tests {
         assert_eq!(item.id("minecraft:stick"), Some(2));
         let block = builtin.get("minecraft:block").unwrap();
         assert_eq!(block.id("minecraft:stone"), Some(1));
-        assert_eq!(
-            builtin
-                .get("minecraft:entity_type")
-                .unwrap()
-                .id("minecraft:player"),
-            Some(0)
-        );
+        let entities = builtin.get("minecraft:entity_type").unwrap();
+        assert_eq!(entities.id("minecraft:player"), Some(0));
+        // The era's own `entity-types.json` types follow the fixed network ids, so both
+        // ends of a connection number a pig the same and its `AddEntity` reaches the client.
+        assert_eq!(entities.id("minecraft:pig"), Some(13));
+        assert_eq!(entities.name(13), Some("minecraft:pig"));
+        assert_eq!(entities.id("minecraft:zombie"), Some(14));
         assert_eq!(
             builtin
                 .get("minecraft:attribute")
