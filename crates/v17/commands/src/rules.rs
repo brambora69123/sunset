@@ -112,7 +112,7 @@ mod tests {
         assert!(rules.contains("doDaylightCycle"));
         assert!(rules.get_boolean("doFireTick"));
         assert!(!rules.get_boolean("keepInventory"));
-        assert_eq!(rules.get_boolean("missing"), false);
+        assert!(!rules.get_boolean("missing"));
         assert_eq!(rules.get("missing"), "");
         let all = rules.get_all();
         assert_eq!(all.len(), 9);

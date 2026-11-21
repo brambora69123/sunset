@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(Criterion::by_name("nope"), None);
         assert!(!Criterion::Dummy.is_read_only());
         assert!(Criterion::Health.is_read_only());
-        assert!(Criterion::DeathCount.is_read_only() == false);
+        assert!(!Criterion::DeathCount.is_read_only());
         assert!(Criterion::by_name("stat.jump").is_some());
     }
 
@@ -366,7 +366,7 @@ mod tests {
         assert!(board.add_member_to_team("p", "t"));
         board.remove_team("t");
         assert_eq!(board.get_team_of_member("p"), None);
-        assert!(board.add_member_to_team("p", "t") == false);
+        assert!(!board.add_member_to_team("p", "t"));
     }
 
     #[test]

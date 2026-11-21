@@ -772,10 +772,7 @@ impl Mob {
         if follow {
             // advance past nodes closer than 2 * width
             let reach = (self.width * 2.0) as f64;
-            loop {
-                let Some(path) = self.path.as_mut() else {
-                    break;
-                };
+            while let Some(path) = self.path.as_mut() {
                 if path.is_done() {
                     self.path = None;
                     break;
@@ -809,16 +806,16 @@ impl Mob {
                     turn = -30.0;
                 }
                 self.yaw += turn;
-                if self.stopped_moving && self.walk_target.is_some() {
-                    if let Some((wx, _wy, wz)) = resolve_target(world, self.walk_target.unwrap()) {
-                        let toward = (math::atan2(wz - self.z, wx - self.x) * 180.0
-                            / std::f64::consts::PI) as f32
-                            - 90.0;
-                        let strafe_angle =
-                            (self.yaw - toward + 90.0) * std::f32::consts::PI / 180.0;
-                        self.sideways_speed = -math::sin(strafe_angle) * self.forward_speed;
-                        self.forward_speed *= math::cos(strafe_angle);
-                    }
+                if self.stopped_moving
+                    && let Some(walk) = self.walk_target
+                    && let Some((wx, _wy, wz)) = resolve_target(world, walk)
+                {
+                    let toward = (math::atan2(wz - self.z, wx - self.x) * 180.0
+                        / std::f64::consts::PI) as f32
+                        - 90.0;
+                    let strafe_angle = (self.yaw - toward + 90.0) * std::f32::consts::PI / 180.0;
+                    self.sideways_speed = -math::sin(strafe_angle) * self.forward_speed;
+                    self.forward_speed *= math::cos(strafe_angle);
                 }
                 if dy > 0.0 {
                     self.jumping = true;

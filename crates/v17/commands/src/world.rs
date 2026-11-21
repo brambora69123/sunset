@@ -765,7 +765,7 @@ mod tests {
             world.set_block_with_metadata(1, 2, 3, 1, 1, 3),
             "a new meta changes"
         );
-        assert!(world.is_chunk_loaded(1, 2, 3) == false);
+        assert!(!world.is_chunk_loaded(1, 2, 3));
         world.loaded_chunks.push((1, 3));
         assert!(world.is_chunk_loaded(1, 2, 3));
         assert!(!world.is_air(1, 2, 3));

@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn space_is_special() {
-        assert!(uses_basic_glyph(' ', false) == false);
+        assert!(!uses_basic_glyph(' ', false));
         assert!(uses_basic_glyph('a', false));
         assert!(!uses_basic_glyph('a', true));
         assert!(uses_basic_glyph('À', false));
