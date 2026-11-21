@@ -120,6 +120,17 @@ fn state_flags(tag: &Tag, key: &str, states: usize) -> io::Result<Vec<bool>> {
     }
     Ok(flags)
 }
+/// A 1.7.10 block's collision box, from the era's own class rules (the same
+/// table the server's `Behaviours` uses), so the client predicts the same
+/// collision the server resolves.
+pub fn era_collision_shape(
+    table: &crate::level::states::StateTable,
+    state: BlockStateId,
+    full_collision: bool,
+) -> io::Result<VoxelShape> {
+    crate::level::era::collision_shape(table, state, false, full_collision)
+}
+
 impl<'r> CachedCollisionRegistry<'r> {
     pub fn registry(&self) -> &'r BlockRegistry {
         self.registry

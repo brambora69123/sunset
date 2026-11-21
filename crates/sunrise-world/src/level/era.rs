@@ -746,7 +746,7 @@ pub(super) fn tags(table: &StateTable) -> HashMap<String, Arc<BlockSet>> {
 /// States whose 1.7.10 shape depends on neighbours (stairs' inner corners,
 /// connected fences) get their static part; see the module docs for the
 /// blocks left with an empty shape.
-pub(super) fn collision_shape(
+pub(crate) fn collision_shape(
     table: &StateTable,
     state: BlockStateId,
     collision_empty: bool,

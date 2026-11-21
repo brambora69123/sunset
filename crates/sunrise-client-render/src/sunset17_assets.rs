@@ -421,12 +421,67 @@ mod tests {
         }
     }
 
+    /// 1.7.10 gives the flat and thin decorations no collision box; the client
+    /// must predict the same, or walking through tall grass catches.
+    #[test]
+    fn the_era_decorations_have_no_collision() {
+        let Some(root) = root() else { return };
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let collisions = crate::collisions::load_1_7_10(&root, assets.registry).unwrap();
+        for name in [
+            "minecraft:tallgrass",
+            "minecraft:yellow_flower",
+            "minecraft:red_flower",
+            "minecraft:sapling",
+            "minecraft:deadbush",
+            "minecraft:reeds",
+            "minecraft:torch",
+            "minecraft:redstone_wire",
+            "minecraft:vine",
+            "minecraft:snow_layer",
+            "minecraft:waterlily",
+            "minecraft:double_plant",
+        ] {
+            let state = assets.registry.default_state(name).unwrap();
+            let shape = collisions
+                .static_shape(state)
+                .unwrap()
+                .expect("a state with a static shape");
+            assert!(
+                shape.is_empty(),
+                "{name} must not collide, its shape is {:?}",
+                shape.coordinates(sunrise_core::geometry::Axis::Y)
+            );
+        }
+        for name in ["minecraft:grass", "minecraft:dirt", "minecraft:stone"] {
+            let state = assets.registry.default_state(name).unwrap();
+            assert!(
+                collisions
+                    .static_shape(state)
+                    .unwrap()
+                    .expect("a static shape")
+                    .is_cube(),
+                "{name} is a full cube"
+            );
+        }
+        let slab = assets
+            .registry
+            .default_state("minecraft:stone_slab")
+            .unwrap();
+        let steps = collisions
+            .static_shape(slab)
+            .unwrap()
+            .expect("a static shape")
+            .coordinates(sunrise_core::geometry::Axis::Y)
+            .len();
+        assert!(steps > 2, "a slab is a half block, not a cube");
+    }
+
     #[test]
     fn the_era_collisions_stand_on_solid_blocks_and_not_on_water() {
         let Some(root) = root() else { return };
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let collisions =
-            crate::collisions::load_1_7_10(assets.registry, &assets.blocks_fluid_flow).unwrap();
+        let collisions = crate::collisions::load_1_7_10(&root, assets.registry).unwrap();
         let stone = assets.registry.default_state("minecraft:stone").unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         assert!(

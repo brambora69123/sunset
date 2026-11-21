@@ -40,21 +40,28 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
 
 /// A 1.7.10 root's collisions: the era's export has no `cached-collision.nbt`.
 ///
-/// 1.7.10 declares its shapes in code, one box per block class, and the export does
-/// not carry them. Each state therefore takes the full cube when its material blocks
-/// movement ([`blocks_fluid_flow`]: every non-air, non-fluid block, the same set the
-/// era's fluid flow stops at) and the empty shape otherwise, so terrain can be stood
-/// on while water and lava stay swimmable. Stairs, slabs and fences collide as full
-/// blocks until a 1.7.10 shape table is prepared; the loss is logged.
+/// 1.7.10 declares its shapes in code, one box per block class, so the table is
+/// built from the era's own rules ([`sunrise_world::collision::era_collision_shape`],
+/// the same one the server's block behaviour tables use): a full cube where the
+/// export says `full_collision`, the per-block boxes (slabs, stairs, fences,
+/// panes, chests, doors, signs…) where the era class gives one, and nothing for
+/// the flat or thin decorations the era gives no box — tall grass, flowers,
+/// saplings, crops, torches, rails, redstone wire.
 pub fn load_1_7_10<'r>(
+    root: &Path,
     registry: &'r BlockRegistry,
-    blocks_fluid_flow: &std::collections::BTreeSet<String>,
 ) -> Result<BlockCollisionRegistry<'r>> {
-    log::info!(
-        "Sunrise: 1.7.10 has no cached-collision.nbt; every solid block collides as a full \
-         cube (stairs, slabs and fences included) and every other state not at all"
-    );
-    let tag = collision_table(registry, blocks_fluid_flow)?;
+    let facts = sunrise_items::blocks::BlockFacts::load(root, registry)?;
+    let table = sunrise_world::level::states::StateTable::new(registry)?;
+    let mut shapes = Vec::with_capacity(registry.len());
+    for id in 0..registry.len() {
+        let state = BlockStateId(id as u32);
+        let full = facts.get(state).full_collision;
+        shapes.push(sunrise_world::collision::era_collision_shape(
+            &table, state, full,
+        )?);
+    }
+    let tag = collision_table(registry, &shapes)?;
     let cached = CachedCollisionRegistry::from_nbt(&tag, registry)?;
     if !cached.has_canonical_identities() {
         return Err("1.7.10 collisions require canonical shape identities".into());
@@ -67,7 +74,7 @@ pub fn load_1_7_10<'r>(
 /// shape id per registry state.
 fn collision_table(
     registry: &BlockRegistry,
-    blocks_fluid_flow: &std::collections::BTreeSet<String>,
+    shapes: &[VoxelShape],
 ) -> Result<sunrise_core::nbt::Tag> {
     use sunrise_core::{
         geometry::{Axis, VoxelShape},
@@ -113,14 +120,32 @@ fn collision_table(
         );
         Tag::Compound(entry)
     };
-    let empty = VoxelShape::empty();
-    let block = VoxelShape::block();
-    let cached_shapes = (0..registry.len())
-        .map(|id| {
-            let state = registry.state(BlockStateId(id as u32));
-            i32::from(state.is_some_and(|state| blocks_fluid_flow.contains(&*state.name)))
-        })
-        .collect();
+    let shape_key = |shape: &VoxelShape| -> Vec<u64> {
+        [Axis::X, Axis::Y, Axis::Z]
+            .into_iter()
+            .flat_map(|axis| shape.coordinates(axis).iter().map(|v| v.to_bits()))
+            .collect()
+    };
+    let mut interned: Vec<VoxelShape> = vec![VoxelShape::empty(), VoxelShape::block()];
+    let mut seen: std::collections::HashMap<Vec<u64>, i32> = std::collections::HashMap::from([
+        (shape_key(&interned[0]), 0),
+        (shape_key(&interned[1]), 1),
+    ]);
+    let mut cached_shapes = Vec::with_capacity(registry.len());
+    for id in 0..registry.len() {
+        let shape = shapes.get(id).cloned().unwrap_or_else(VoxelShape::empty);
+        let key = shape_key(&shape);
+        let index = match seen.get(&key) {
+            Some(index) => *index,
+            None => {
+                let index = i32::try_from(interned.len())?;
+                interned.push(shape);
+                seen.insert(key, index);
+                index
+            }
+        };
+        cached_shapes.push(index);
+    }
     let mut table = Compound::new();
     table.insert(key("DataVersion"), Tag::Int(sunrise_world::DATA_VERSION));
     table.insert(
@@ -134,7 +159,22 @@ fn collision_table(
     );
     table.insert(
         key("shapes"),
-        Tag::List(vec![entry(&empty, 1), entry(&block, 2)]),
+        Tag::List(
+            interned
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| {
+                    entry(
+                        shape,
+                        match index {
+                            0 => 1,
+                            1 => 2,
+                            _ => 0,
+                        },
+                    )
+                })
+                .collect(),
+        ),
     );
     table.insert(key("cached_shapes"), Tag::IntArray(cached_shapes));
     Ok(Tag::Compound(table))

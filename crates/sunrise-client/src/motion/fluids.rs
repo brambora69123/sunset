@@ -19,6 +19,15 @@ use sunrise_world::{
 pub const WATER: FluidTagId = FluidTagId(0);
 pub const LAVA: FluidTagId = FluidTagId(1);
 
+/// Whether the loaded registry is the 1.7.10 export: its states carry the era's
+/// `meta` property instead of 26.3's named ones.
+fn era_registry(registry: &sunrise_world::registry::BlockRegistry) -> bool {
+    registry
+        .default_state("minecraft:stone")
+        .and_then(|id| registry.state(id))
+        .is_some_and(|state| state.properties.contains_key("meta"))
+}
+
 /// Per-state fluid facts the player's immersion and fall-reset rays read.
 pub struct FluidResources {
     states: FluidStateTable,
@@ -292,6 +301,19 @@ impl MotionWorld<'_, '_, '_> {
         // the server's copy of a guest who boards a boat while swimming is not
         // left in the swimming box (eye 0.4) in the seat, at the waterline,
         // where the boat drowned and suffocated them (#4427).
+        // 1.7.10 has no swimming state at all (`Entity.updateSwimming`, and the
+        // whole sprint-swim pose and its faster travel, arrived in 1.13): the
+        // era player always swims the old way, creeping through water with the
+        // jump key and no pose change.
+        if era_registry(self.assets.registry) {
+            self.player.swimming = false;
+            self.player.fluids.first_tick = false;
+            self.tick_remaining_fire()?;
+            if self.player.is_in_lava() {
+                self.player.fall_distance *= 0.5;
+            }
+            return Ok(());
+        }
         self.player.swimming = !self.player.flying
             && !self.player.is_passenger
             && self.player.sprinting

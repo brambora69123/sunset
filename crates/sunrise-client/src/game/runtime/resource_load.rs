@@ -299,7 +299,7 @@ pub(super) fn load_core(
             let collision = Step::spawn(scope, parallel, "collision", || {
                 startup::time("core.collision", || {
                     if era {
-                        collisions::load_1_7_10(registry, &assets.blocks_fluid_flow)
+                        collisions::load_1_7_10(root, registry)
                     } else {
                         collisions::load(root, registry)
                     }
