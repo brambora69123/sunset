@@ -14,6 +14,12 @@
 //! most 15 blocks, so the 48-wide region determines the centre exactly.
 //! `relight_block` applies vanilla's incremental decrease/increase passes
 //! directly to resident chunks after a block change.
+//!
+//! The 1.7.10 content root lights with 1.7.10's own rules (`World.findLight`,
+//! [`LightTables::load`]'s legacy tables): the same flood without
+//! `shapeOccludes`, and an opaque emitting block entered at 1
+//! (`getOpacity() >= 15 && getLight() > 0`) instead of cut off. That is the
+//! light a 1.7.10 server stored.
 use crate::fast_hash::FxHashMap;
 use crate::{
     blocks::BlockFacts,
@@ -37,6 +43,17 @@ const FULL: u16 = 1;
 /// so its cells take the emitting path: they emit their chunk's stored answer
 /// (`Chunk::dynamic_emission`), or the state's own light without one.
 const DYNAMIC: u32 = 1 << 20;
+
+/// Whether `registry` is the 1.7.10 content export's: every 1.7.10 state
+/// carries its block metadata (`meta`), air included, while 26.3 splits a
+/// block into typed properties. Such content has 1.7.10's light rules
+/// (`getOpacity`) and no `occlusion.nbt`.
+fn is_1_7_10_content(registry: &BlockRegistry) -> bool {
+    registry
+        .default_state("minecraft:air")
+        .and_then(|air| registry.state(air))
+        .is_some_and(|air| air.properties.get("meta").is_some())
+}
 
 #[derive(Clone, Copy)]
 struct Cell {
@@ -71,12 +88,26 @@ pub struct LightTables {
 impl LightTables {
     /// Dampening and emission only: every occlusion face is empty.
     pub fn new(facts: &BlockFacts) -> Self {
+        Self::with_cells(facts, false)
+    }
+    /// The 1.7.10 light model (`World.findLight`): light loses the opacity of
+    /// the cell it enters in every direction, with no shape occlusion (1.7.10
+    /// has no `shapeOccludes`), and an opaque block that emits is entered at 1
+    /// instead of cut off (`getOpacity() >= 15 && getLight() > 0`).
+    fn legacy(facts: &BlockFacts) -> Self {
+        Self::with_cells(facts, true)
+    }
+    fn with_cells(facts: &BlockFacts, legacy: bool) -> Self {
         let mut tables = Self {
             cells: facts
                 .states
                 .iter()
                 .map(|s| Cell {
-                    dampening: s.dampening.min(15),
+                    dampening: if legacy && s.emission > 0 && s.dampening >= 15 {
+                        1
+                    } else {
+                        s.dampening.min(15)
+                    },
                     emission: s.emission.min(15),
                     dynamic: s.dynamic_light,
                     shaped: false,
@@ -165,8 +196,13 @@ impl LightTables {
         self.info = info;
         self.block_masks = block_masks;
     }
-    /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
+    /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`; the
+    /// 1.7.10 content root (which exports no occlusion table and follows its
+    /// own light rules) gets the legacy tables instead.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
+        if is_1_7_10_content(registry) {
+            return Ok(Self::legacy(facts));
+        }
         use sunrise_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
         let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
         let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
@@ -2011,6 +2047,122 @@ pub(crate) mod tests {
         assert_eq!(block(&w, 9, 0, 8), 13);
         assert_eq!(block(&w, 8, 3, 8), 11);
         assert_eq!(block(&w, 8, -1, 8), 0);
+    }
+
+    /// Three states: air, an opaque 15 (glowstone) and an opaque 13 (a lit
+    /// furnace). 1.7.10 gives both `getOpacity()` 255.
+    fn emitter_facts() -> BlockFacts {
+        use crate::blocks::{Fluid, RenderShape, Sounds, StateFacts};
+        let state = |name: &str, emission: u8, dampening: u8| StateFacts {
+            name: name.into(),
+            emission,
+            dynamic_light: false,
+            dampening,
+            skylight_down: false,
+            shape_occlusion: false,
+            can_occlude: false,
+            solid_render: false,
+            hardness: 0.0,
+            requires_tool: false,
+            replaceable: false,
+            random_ticks: false,
+            block_entity: false,
+            render_shape: RenderShape::Model,
+            destroy_overlay: true,
+            full_collision: true,
+            friction: 0.6,
+            explosion_resistance: 0.0,
+            item: "".into(),
+            pick_item: "".into(),
+            sounds: Sounds {
+                volume: 1.0,
+                pitch: 1.0,
+                break_sound: "".into(),
+                step: "".into(),
+                place: "".into(),
+                hit: "".into(),
+                fall: "".into(),
+            },
+            fluid: Fluid::None,
+            fluid_level: 0,
+            fluid_falling: false,
+            waterlogged: false,
+            random_offset: false,
+            offset_limits: None,
+            outline_offset: false,
+            legacy_solid: true,
+            sturdy_full: 63,
+            classes: Arc::from(Vec::<Arc<str>>::new()),
+            outline: Arc::from(Vec::<[f64; 6]>::new()),
+            outline_edges: Arc::from(Vec::<[f64; 6]>::new()),
+            map_color: 0,
+        };
+        BlockFacts {
+            states: vec![
+                state("minecraft:air", 0, 0),
+                state("minecraft:glowstone", 15, 15),
+                state("minecraft:lit_furnace", 13, 15),
+            ],
+            air: BlockStateId(0),
+            woods: HashMap::new(),
+            sign_texts: HashMap::new(),
+        }
+    }
+
+    /// 1.7.10's `World.findLight`: a block with `getOpacity() >= 15` that
+    /// emits is entered at 1, so its cell takes a brighter neighbour's light.
+    /// 26.3's rules enter it at its full dampening and keep only its own light.
+    #[test]
+    fn an_opaque_emitter_takes_brighter_neighbour_light_in_1_7_10() {
+        let facts = emitter_facts();
+        let place = |c: &mut Chunk| {
+            c.set(8, -2, 8, 1);
+            c.set(9, -2, 8, 2);
+        };
+        let legacy = lit_world(
+            ColumnLayout::VANILLA,
+            &LightTables::with_cells(&facts, true),
+            place,
+        );
+        let modern = lit_world(
+            ColumnLayout::VANILLA,
+            &LightTables::with_cells(&facts, false),
+            place,
+        );
+        assert_eq!(block(&legacy, 8, -2, 8), 15);
+        assert_eq!(
+            block(&legacy, 9, -2, 8),
+            14,
+            "the furnace cell takes the glowstone's 15 at 1"
+        );
+        assert_eq!(
+            block(&modern, 9, -2, 8),
+            13,
+            "26.3 keeps the furnace's own 13"
+        );
+    }
+
+    fn facts_registry(states: &str) -> BlockRegistry {
+        BlockRegistry::from_facts_json(states.as_bytes()).expect("a registry from facts")
+    }
+
+    /// The light model follows the content root: 1.7.10 states carry their
+    /// block metadata (`meta`), air included, which 26.3's typed states do not.
+    #[test]
+    fn only_the_1_7_10_content_lights_with_1_7_10_rules() {
+        let row = |name: &str, properties: &str| {
+            format!(r#"["{name}",true,false,"Block{{{name}}}",{{"id":"{name}"{properties}}}]"#)
+        };
+        let legacy = facts_registry(&format!(
+            r#"{{"states":[{}],"defaults":{{"minecraft:air":0}}}}"#,
+            row("minecraft:air", r#","properties":{"meta":"0"}"#),
+        ));
+        let modern = facts_registry(&format!(
+            r#"{{"states":[{}],"defaults":{{"minecraft:air":0}}}}"#,
+            row("minecraft:air", ""),
+        ));
+        assert!(is_1_7_10_content(&legacy));
+        assert!(!is_1_7_10_content(&modern));
     }
     #[test]
     fn bottom_slab_takes_sky_from_above_but_not_through_its_bottom() {
