@@ -1047,6 +1047,24 @@ pub(super) fn make_streaming(
             }
         }
     });
+    // The 1.7.10 port's generator (`--1-7-10-terrain`). Its content root is
+    // the resources folder the world opened with; the flag is off by default,
+    // so a launch without it keeps the 26.3 generator below.
+    let sunset17 = if options.terrain_1_7_10 && dim == Dim::Overworld {
+        match sunrise_client::sunset17gen::Sunset17Terrain::new(
+            terrain_resources,
+            seed,
+            shape.column(),
+        ) {
+            Ok(inner) => Some(inner),
+            Err(e) => {
+                log::warn!("Sunrise: 1.7.10 terrain unavailable: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     // The sea level the level's rules and the mods read is the one its generator builds with
     // (`ChunkGenerator.getSeaLevel`), so a pack's noise settings or a superflat world are seen:
     // the superflat generators' is -63 (`FlatLevelSource.getSeaLevel`).
@@ -1131,6 +1149,20 @@ pub(super) fn make_streaming(
         Streaming::new(
             Arc::new(Persistent {
                 inner,
+                save: save.clone(),
+                registry: pack.assets.clone(),
+                biomes: biomes.clone(),
+            }),
+            pack.context_with(biomes.clone()),
+            res.threads(),
+        )
+    } else if let Some(inner) = sunset17 {
+        // 1.7.10 has no structure locator yet (`/locate structure` and
+        // exploration maps stay empty for this level).
+        register_sea_level(inner.sea_level());
+        Streaming::new(
+            Arc::new(Persistent {
+                inner: Arc::new(inner),
                 save: save.clone(),
                 registry: pack.assets.clone(),
                 biomes: biomes.clone(),

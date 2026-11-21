@@ -163,6 +163,7 @@ impl LaunchArguments {
                 | "--session-stdin"
                 | "--creative"
                 | "--test-terrain"
+                | "--1-7-10-terrain"
                 | "--no-pause"
                 | "--offscreen"
                 | "--headless"

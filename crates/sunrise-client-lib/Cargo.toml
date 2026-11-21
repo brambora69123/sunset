@@ -39,6 +39,12 @@ sunrise-perf-format = { path = "../sunrise-perf-format" }
 # once, not for every phase of every tick.
 rayon = "1.10"
 sunrise-world = { path = "../sunrise-world" }
+# The 1.7.10 port's verified terrain, carvers and population pass (crates/v17),
+# bound to streaming by sunset17gen.rs.
+sunset-1-7-chunkgen = { path = "../v17/chunkgen" }
+sunset-1-7-carver = { path = "../v17/carver" }
+sunset-1-7-features = { path = "../v17/features" }
+sunset-1-7-content = { path = "../v17/content" }
 sunrise-protocol = { path = "../sunrise-protocol" }
 # server.properties, eula.txt and the user lists, shared with sunrise-server.
 sunrise-server-files = { path = "../sunrise-server-files" }
@@ -154,6 +160,12 @@ naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "msl-out", "spv-
 [[bin]]
 name = "sunrise-ctl"
 path = "../sunrise-client/src/bin/sunrise-ctl/main.rs"
+
+# Generates 1.7.10 chunks through the engine's `ChunkGenerator`
+# (`--1-7-10-terrain`) and prints the reference dump format.
+[[bin]]
+name = "sunset17_probe"
+path = "../sunrise-client/src/bin/sunset17_probe.rs"
 
 [[example]]
 name = "chunk_load_bench"
