@@ -368,6 +368,7 @@ impl PackResources {
             polytone_particles,
             polytone_post,
             polytone_colors: Arc::new(read_colors(root)),
+            era_ui: crate::game::era_ui::ui_era(root.source()),
         })
     }
 }

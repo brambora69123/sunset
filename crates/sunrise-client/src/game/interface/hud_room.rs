@@ -57,17 +57,26 @@ impl Game<'_> {
     /// as they are laid out, after `hud_room`, so the overlays drawn over the HUD see them.
     pub(super) fn keep_status_rows(&mut self, draws: &[hud_layout::GuiDraw], w: i32, h: i32) {
         if let Some(top) = hud_layout::draws_top(draws).filter(|top| *top < h) {
-            let half = hud_overlays::HOTBAR_HALF_WIDTH;
-            self.ui.room.add(
-                Keep::StatusRows,
-                [
-                    (w / 2 - half) as f32,
-                    top as f32,
-                    (2 * half) as f32,
-                    (h - top) as f32,
-                ],
-            );
+            self.keep_status_top(top, w, h);
         }
+    }
+
+    /// [`Game::keep_status_rows`] from the rows' highest top alone, for a HUD
+    /// laid out by another painter (1.7.10's).
+    pub(super) fn keep_status_top(&mut self, top: i32, w: i32, h: i32) {
+        if top >= h {
+            return;
+        }
+        let half = hud_overlays::HOTBAR_HALF_WIDTH;
+        self.ui.room.add(
+            Keep::StatusRows,
+            [
+                (w / 2 - half) as f32,
+                top as f32,
+                (2 * half) as f32,
+                (h - top) as f32,
+            ],
+        );
     }
 
     /// An overlay holds the middle of the view (the radial menu, once it shows: a quick tap of

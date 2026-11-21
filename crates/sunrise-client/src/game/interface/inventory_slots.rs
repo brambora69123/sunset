@@ -1,6 +1,7 @@
 //! Container screen slots: item and decoration drawing, the carried stack and quick craft drag,
 //! slot positions and hit tests, highlights, and the crafting result slot.
 use super::*;
+use sunrise_client::screens_1_7_10::Screen17;
 
 #[cfg(test)]
 thread_local! { pub(in crate::game) static SLOT_POSITIONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
@@ -166,6 +167,12 @@ impl Game<'_> {
         if self.screen == Screen::Creative {
             return Self::creative_origin(batch);
         }
+        if self.era_container().is_some() {
+            // InventoryMenuScreen.init: the era's 176x166 panel centered in
+            // GUI pixels, with none of 26.3's recipe-book or room shifts (its
+            // painter draws at that origin).
+            return batch.centered_origin(176.0, 166.0);
+        }
         let width = self.native_screen_width().unwrap_or(176.0);
         let (x, y) = batch.centered_origin(width, self.screen_height());
         let x = x + self.recipe_book_shift(batch.width) - self.screen_room_shift(batch);
@@ -175,6 +182,13 @@ impl Game<'_> {
     pub(super) fn slot_position(&self, i: usize) -> (f32, f32) {
         #[cfg(test)]
         SLOT_POSITIONS.with(|count| count.set(count.get() + 1));
+        // A 1.7.10 menu uses the era painter's slot table, so the hit
+        // rectangles are the ones it draws.
+        if let Some(screen) = self.era_container()
+            && let Some(position) = super::era_ui::era_slot_position(screen, i)
+        {
+            return position;
+        }
         if self.creative_inventory_open()
             && let Some(position) = Creative::inventory_slot_position(i)
         {
@@ -264,11 +278,15 @@ impl Game<'_> {
         if self.book_covers_menu(batch.width) {
             return None;
         }
+        // The era's player inventory has no offhand slot, so the engine's 504
+        // has no rectangle there to click.
+        let era_offhand = self.era_container() == Some(Screen17::PlayerInventory);
         match self.built_container(batch) {
             Some(layout) => self.first_hovered(
                 layout
                     .slots
                     .iter()
+                    .filter(|(slot, _)| !(era_offhand && *slot == 504))
                     .filter(|(_, r)| {
                         // AbstractContainerScreen.isHovering: the 16x16 slot
                         // grows by one pixel on every side, so the gaps
@@ -283,12 +301,18 @@ impl Game<'_> {
     /// `slot_at` from the game's state alone, without a build.
     fn slot_at_unbuilt(&self, batch: &HudBatch, x: f32, y: f32) -> Option<usize> {
         let (ox, oy) = self.inventory_origin_unbuilt(batch);
-        let hits = self.slots().into_iter().filter(|&i| {
-            let (sx, sy) = self.slot_position(i);
-            // AbstractContainerScreen.isHovering: the 16x16 slot grows by one
-            // pixel on every side, so the gaps between slots still hover one.
-            x >= ox + sx - 1.0 && x < ox + sx + 17.0 && y >= oy + sy - 1.0 && y < oy + sy + 17.0
-        });
+        let era_offhand = self.era_container() == Some(Screen17::PlayerInventory);
+        let hits = self
+            .slots()
+            .into_iter()
+            .filter(|&i| !(era_offhand && i == 504))
+            .filter(|&i| {
+                let (sx, sy) = self.slot_position(i);
+                // AbstractContainerScreen.isHovering: the 16x16 slot grows by
+                // one pixel on every side, so the gaps between slots still
+                // hover one.
+                x >= ox + sx - 1.0 && x < ox + sx + 17.0 && y >= oy + sy - 1.0 && y < oy + sy + 17.0
+            });
         self.first_hovered(hits)
     }
     /// The slot a pointer over every one of `hits` (in `slots` order) takes:
@@ -416,12 +440,20 @@ impl Game<'_> {
     }
     pub(super) fn draw_inventory_slots(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
         let drag = self.drag_view();
+        // 1.7.10 has no shield or offhand slot and paints the armour slots
+        // into its inventory texture, so neither placeholder is drawn.
+        let era = self.era_container().is_some();
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
-            if i == 504 && self.offhand.is_none() {
-                batch.sprite(&self.gui.atlas, "container/slot/shield", ox + sx, oy + sy);
+            if i == 504 {
+                if era {
+                    continue;
+                }
+                if self.offhand.is_none() {
+                    batch.sprite(&self.gui.atlas, "container/slot/shield", ox + sx, oy + sy);
+                }
             }
-            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
+            if !era && (500..504).contains(&i) && self.armor[i - 500].is_none() {
                 let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
                 batch.sprite(
                     &self.gui.atlas,
@@ -440,6 +472,7 @@ impl Game<'_> {
             return;
         }
         let (ox, oy) = self.inventory_origin(batch);
+        let era = self.era_container();
         {
             let atlas = &self.gui.atlas;
             self.render_transparent_background("inventory", batch);
@@ -466,6 +499,16 @@ impl Game<'_> {
                 .and_then(|k| self.world.block_entities.get(&k))
             {
                 Some(_) if self.draw_native_screen(batch, ox, oy) => {}
+                _ if era.is_some() => {
+                    // The era's own panel, labels and furnace progress.
+                    if let Some(screen) = era {
+                        self.draw_era_container(batch, screen);
+                    }
+                    self.draw_screen_phase(
+                        batch,
+                        sunrise_client::screen_draw::RenderPhase::Background,
+                    );
+                }
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
@@ -488,12 +531,7 @@ impl Game<'_> {
                         sunrise_client::screen_draw::RenderPhase::Background,
                     );
                     // A server's furnace menu has the title it was given.
-                    let title = self.remote_menu_title().unwrap_or_else(|| {
-                        sunrise_client::text::Text::literal(
-                            self.container_title(self.translate_with_fallback(key, fallback)),
-                        )
-                        .resolve_legacy()
-                    });
+                    let title = self.container_menu_title(key, fallback);
                     screen_info::name_container(|| title.plain());
                     let tw = atlas.font.width_text(&title);
                     batch.text_styled(
@@ -597,6 +635,10 @@ impl Game<'_> {
         }
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
+        }
+        if era.is_some() {
+            self.draw_era_inventory(batch, ox, oy);
+            return;
         }
         self.draw_hovered_slot_highlight(batch, false, ox, oy);
         self.draw_inventory_slots(batch, ox, oy);

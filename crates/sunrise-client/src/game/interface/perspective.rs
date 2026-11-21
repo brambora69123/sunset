@@ -1021,18 +1021,19 @@ impl Game<'_> {
         let quads = player_preview_quads_no_cull(verts, gui, fire, &atlas.sprites, wings);
         emit_preview(batch, quads, glints, [x0, y0, x1, y1]);
     }
-    /// The survival inventory's player box (`InventoryScreen`).
+    /// The survival inventory's player box (`InventoryScreen`, and 1.7.10's
+    /// `SurvivalInventoryScreen.renderMenuBackground`: `renderEntity` at
+    /// `(x + 51, y + 75)`, size 30, the feet at `y + 75`).
     pub(super) fn draw_inventory_player(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
         if self.screen == Screen::Inventory {
-            self.draw_player_preview(
-                batch,
-                ox + 26.0,
-                oy + 8.0,
-                ox + 75.0,
-                oy + 78.0,
-                30.0,
-                0.0625,
-            );
+            let era = self.era_container()
+                == Some(sunrise_client::screens_1_7_10::Screen17::PlayerInventory);
+            let (x0, y0, x1, y1) = if era {
+                (ox + 21.0, oy + 21.0, ox + 81.0, oy + 75.0)
+            } else {
+                (ox + 26.0, oy + 8.0, ox + 75.0, oy + 78.0)
+            };
+            self.draw_player_preview(batch, x0, y0, x1, y1, 30.0, 0.0625);
         }
     }
 }
