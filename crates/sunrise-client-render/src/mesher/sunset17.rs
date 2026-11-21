@@ -263,7 +263,6 @@ struct SectionWorld<'a> {
     pad: &'a Padded,
     table: &'a StateTable17,
     biomes: &'a Biomes,
-    colormaps: &'a Colormaps,
     tints: &'a Tints<'a>,
 }
 
@@ -282,18 +281,24 @@ impl SectionWorld<'_> {
                     self.tints.origin,
                     [x + dx, y, z + dz],
                 );
-                let info = self.biomes.get(biome);
-                // `Biome.getGrassColor` clamps both to 0..1 first.
-                let temperature = f64::from(info.temperature).clamp(0.0, 1.0);
-                let downfall = f64::from(info.downfall).clamp(0.0, 1.0);
+                // `BiomeColors.getGrassColor`/`getFoliageColor` average nine
+                // samples, each of them the biome's own colour at that column
+                // (`Biome.getGrassColor` with its modifiers, or the colormap
+                // point the table resolved for the biome) — not the colormap
+                // applied to the biome's climate again.
                 let color = match tint {
-                    Tint::Foliage => self.colormaps.foliage(temperature, downfall),
-                    _ => self.colormaps.grass(temperature, downfall),
+                    Tint::Foliage => {
+                        self.biomes
+                            .foliage(biome, f64::from(x + dx), f64::from(z + dz))
+                    }
+                    _ => self
+                        .biomes
+                        .grass(biome, f64::from(x + dx), f64::from(z + dz)),
                 };
                 sum = [
-                    sum[0] + (color >> 16 & 0xFF),
-                    sum[1] + (color >> 8 & 0xFF),
-                    sum[2] + (color & 0xFF),
+                    sum[0] + ((color >> 16 & 0xFF) as i32),
+                    sum[1] + ((color >> 8 & 0xFF) as i32),
+                    sum[2] + ((color & 0xFF) as i32),
                 ];
                 count += 1;
             }
@@ -344,12 +349,13 @@ pub(super) fn mesh(input: MeshInput<'_>, out: &mut SectionMesh) {
         origin,
         options,
     } = input;
-    let Some(era) = &render.era else { return };
+    if render.era.is_none() {
+        return;
+    }
     let world = SectionWorld {
         pad,
         table,
         biomes,
-        colormaps: &era.colormaps,
         tints,
     };
     let mut renderer = RenderBlocks::new(&world, options);

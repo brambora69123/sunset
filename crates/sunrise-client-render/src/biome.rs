@@ -794,6 +794,12 @@ impl Biomes {
             frozen: info.frozen,
         })
     }
+    /// `Biome.getFoliageColor`: the table already carries the era's resolved
+    /// colour for every biome (colormap point or the biome's own override).
+    pub fn foliage(&self, id: u16, _x: f64, _z: f64) -> u32 {
+        self.get(id).foliage
+    }
+
     pub fn grass(&self, id: u16, x: f64, z: f64) -> u32 {
         let b = self.get(id);
         match b.modifier {
