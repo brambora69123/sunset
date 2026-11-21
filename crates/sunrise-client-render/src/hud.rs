@@ -1301,6 +1301,8 @@ impl HudAtlas {
         if crate::sunset17_assets::is_source(root) {
             return Self::build_1_7_10(root, defaults);
         }
+        // A reload back to a 26.3 root drops the era's cloud texture.
+        crate::clouds::set_era_texture(None);
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
@@ -1311,12 +1313,64 @@ impl HudAtlas {
         ));
         Ok(atlas)
     }
-    /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens and
-    /// `textures/font` sheets, packed into the same atlas the HUD draws from. Its screens are
-    /// looked up by their era path (`blit_rect("gui/icons")`), and the font is the bitmap one
+    /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens,
+    /// `textures/font` sheets and `textures/environment` sky (sun, moon phases, clouds and the
+    /// End sky), packed into the same atlas the HUD draws from. Its screens are looked up by
+    /// their era path (`blit_rect("gui/icons")`), and the font is the bitmap one
     /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
     pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
-        let mut atlas = Self::pack(root, defaults, &["gui", "font"], false, false)?;
+        let mut atlas = Self::pack(
+            root,
+            defaults,
+            &["gui", "font", "environment"],
+            false,
+            false,
+        )?;
+        // The era's names for the sky bodies: its `environment/sun.png` and the four by two
+        // `moon_phases.png` sheet, which the 26.3 sky pass asks for by phase.
+        if let Some(sun) = atlas.sprites.get("environment/sun").copied() {
+            atlas
+                .sprites
+                .insert("environment/celestial/sun".to_owned(), sun);
+        }
+        if let Some(moon) = atlas.sprites.get("environment/moon_phases").copied() {
+            let phases = [
+                "full_moon",
+                "waning_gibbous",
+                "third_quarter",
+                "waning_crescent",
+                "new_moon",
+                "waxing_crescent",
+                "first_quarter",
+                "waxing_gibbous",
+            ];
+            let (du, dv) = ((moon.u1 - moon.u0) / 4.0, (moon.v1 - moon.v0) / 2.0);
+            for (phase, i) in phases.into_iter().zip(0..8u32) {
+                let (x, y) = ((i % 4) as f32, (i / 4) as f32);
+                atlas.sprites.insert(
+                    format!("environment/celestial/moon/{phase}"),
+                    Rect {
+                        u0: moon.u0 + du * x,
+                        v0: moon.v0 + dv * y,
+                        u1: moon.u0 + du * (x + 1.0),
+                        v1: moon.v0 + dv * (y + 1.0),
+                        w: 32,
+                        h: 32,
+                    },
+                );
+            }
+        }
+        let clouds = atlas
+            .sprites
+            .get("environment/clouds")
+            .map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        crate::clouds::set_era_texture(clouds);
+        log::info!(
+            "Sunrise: 1.7.10 sky sprites: sun {}, moon phases {}, clouds {}",
+            atlas.sprites.contains_key("environment/sun"),
+            atlas.sprites.contains_key("environment/moon_phases"),
+            clouds.is_some()
+        );
         pack_text::load_shaders(&mut atlas, root, root);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
             root,

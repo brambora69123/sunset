@@ -26,6 +26,9 @@ pub struct Environment {
     /// The data source and selected packs used to rebuild a level's environment.
     source: ResourceSource,
     dimension: String,
+    /// A 1.7.10 content root: there is no timeline, and [`Self::sample`] runs the era's
+    /// clock arithmetic ([`crate::sky_1_7_10`]) instead of sampling attribute layers.
+    era: bool,
     packs: PackModifiers,
 }
 
@@ -58,6 +61,9 @@ pub struct Sky {
     pub cloud_fog_end: f32,
     /// `visual/cloud_height`.
     pub cloud_height: f32,
+    /// This sample is a 1.7.10 content root's: its clock, colours and constants
+    /// ([`crate::sky_1_7_10`]) are what the sky and the fog draw.
+    pub era: bool,
 }
 
 /// Where and when the sky is sampled.
@@ -1013,7 +1019,7 @@ impl Environment {
         if crate::sunset17_assets::is_source(root) {
             log::info!(
                 "Sunrise: 1.7.10 has no dimension_type files; {dimension} uses the era's \
-                 WorldProvider colours and no timelines (no day/night cycle in the environment)"
+                 WorldProvider colours and no timelines (its sky reads the day clock instead)"
             );
             let json = dimension_1_7_10(dimension);
             return Self::from_dimension_json(root, dimension, packs, extra, json);
@@ -1149,6 +1155,7 @@ impl Environment {
             system: builder.build(),
             source: root.clone(),
             dimension: dimension.to_owned(),
+            era: crate::sunset17_assets::is_source(root),
             packs: packs.clone(),
             frame,
             biomes,
@@ -1257,7 +1264,7 @@ impl Environment {
             Some(Value::Argb(c)) => c,
             _ => [0.0; 4],
         };
-        Sky {
+        let mut sky = Sky {
             sky_color: rgb("visual/sky_color"),
             fog_color: rgb("visual/fog_color"),
             sky_light_factor: float("visual/sky_light_factor"),
@@ -1275,12 +1282,51 @@ impl Environment {
             fog_end: float("visual/fog_end_distance"),
             cloud_fog_end: float("visual/cloud_fog_end_distance"),
             cloud_height: float("visual/cloud_height"),
+            era: self.era,
+        };
+        if self.era {
+            self.era_sky(&mut sky, at);
         }
+        sky
+    }
+
+    /// `World`, `Dimension` and `Biome`'s sky arithmetic for a 1.7.10 root
+    /// ([`crate::sky_1_7_10`]): the era has no attribute timelines, its sky changes because
+    /// its expressions read the day clock.
+    fn era_sky(&self, sky: &mut Sky, at: &Sample<'_>) {
+        use crate::sky_1_7_10 as era;
+        let time = era::time_of_day(at.day_time);
+        let (rain, thunder) = (at.rain, at.thunder);
+        sky.sky_color = era::sky_color(era::PLAINS_TEMPERATURE, time, rain, thunder);
+        sky.fog_color = era::fog_color(&self.dimension, time);
+        sky.sunrise_color = era::sunrise_color(&self.dimension, time);
+        sky.sun_angle = era::sun_angle(time);
+        // The moon hangs opposite the sun in `renderSky`'s one rotation.
+        sky.moon_angle = (sky.sun_angle + 180.0) % 360.0;
+        sky.star_angle = sky.sun_angle;
+        // `renderSky` draws the stars at `getStarBrightness() * (1 - rain)`.
+        sky.star_brightness = era::star_brightness(time) * (1.0 - rain);
+        sky.cloud_color = era::cloud_color(time, rain, thunder);
+        sky.cloud_height = era::cloud_height(&self.dimension);
+        sky.sky_light_level = era::sky_light_level(time, rain, thunder);
+        // `setupFog` measures the era's distances from the render distance, not from an
+        // attribute; the era fog branch reads the clock itself.
+        sky.fog_start = 0.0;
+        sky.fog_end = 1024.0;
+        sky.cloud_fog_end = 2048.0;
     }
 }
 
 /// `Level.updateSkyBrightness`'s darkening: from the sky light level, a dimension value.
 pub fn sky_darken(environment: &Environment, day_time: i64, rain: f32, thunder: f32) -> i32 {
+    if environment.era {
+        // `World.calculateAmbientDarkness`: the clock's cosine, then rain and thunder.
+        return crate::sky_1_7_10::ambient_darkness(
+            crate::sky_1_7_10::time_of_day(day_time),
+            rain,
+            thunder,
+        );
+    }
     let level = match environment.value(
         "gameplay/sky_light_level",
         &Sample {
@@ -1359,6 +1405,50 @@ mod tests {
 
     /// The level table is global, so the tests that set it take turns.
     static LEVEL_TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The epoch's era root has no dimension_type or timeline files; `sample` runs the 1.7.10
+    /// expressions from the day clock, and the marker files are enough to be recognised.
+    #[test]
+    fn a_1_7_10_root_samples_the_eras_clock() {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-env-era-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for path in [
+            crate::sunset17_assets::GLYPH_SIZES,
+            "assets/minecraft/textures/font/ascii.png",
+        ] {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, [0u8; 1]).unwrap();
+        }
+        let environment = Environment::load(&ResourceSource::directory(dir)).unwrap();
+        let noon = environment.sample(&Sample {
+            day_time: 6000,
+            ..Sample::default()
+        });
+        assert!(noon.era);
+        assert_eq!(noon.sky_color, [121.0 / 255.0, 167.0 / 255.0, 1.0]);
+        assert_eq!(noon.fog_color[0], 0.752_941_2);
+        assert_eq!(noon.sun_angle, 0.0);
+        assert_eq!(noon.moon_angle, 180.0);
+        assert_eq!(noon.cloud_height, 128.0);
+        assert_eq!(noon.cloud_color[3], 0.8);
+        assert_eq!(noon.sky_light_level, 15.0);
+        let sunset = environment.sample(&Sample {
+            day_time: 12000,
+            ..Sample::default()
+        });
+        assert!(sunset.sunrise_color[3] > 0.0, "the sun is on the horizon");
+        assert!(sunset.sky_color[2] > 0.0 && sunset.sky_color[2] < 1.0);
+        assert!((sunset.sun_angle - 77.57).abs() < 0.01);
+        // `World.calculateAmbientDarkness`: 0 at noon, 11 at midnight.
+        assert_eq!(sky_darken(&environment, 6000, 0.0, 0.0), 0);
+        assert_eq!(sky_darken(&environment, 18000, 0.0, 0.0), 11);
+    }
 
     #[test]
     fn resolved_dimension_data_and_raw_darkening_need_no_files() {
