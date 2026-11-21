@@ -93,7 +93,30 @@
     "sunrise-mod-host": "platform",
     "sunrise-telemetry": "sunrise",
     "sunrise-telemetry-server": "sunrise",
-    "sunrise-mod-vocab": "engine"
+    "sunrise-mod-vocab": "engine",
+    "sunset-1-7-assets": "engine",
+    "sunset-1-7-blocks": "engine",
+    "sunset-1-7-carver": "engine",
+    "sunset-1-7-combat": "engine",
+    "sunset-1-7-commands": "engine",
+    "sunset-1-7-content": "engine",
+    "sunset-1-7-core": "engine",
+    "sunset-1-7-features": "engine",
+    "sunset-1-7-chunkformat": "engine",
+    "sunset-1-7-chunkgen": "engine",
+    "sunset-1-7-inventory": "engine",
+    "sunset-1-7-items": "engine",
+    "sunset-1-7-mobs": "engine",
+    "sunset-1-7-net": "engine",
+    "sunset-1-7-noise": "engine",
+    "sunset-1-7-physics": "engine",
+    "sunset-1-7-protocol": "engine",
+    "sunset-1-7-redstone": "engine",
+    "sunset-1-7-render": "engine",
+    "sunset-1-7-save": "engine",
+    "sunset-1-7-structures": "engine",
+    "sunset-1-7-version": "engine",
+    "sunset-1-7": "engine"
   },
   "portable": {
     "_doc": "docs/layers.md#engine: vanilla's rules and data with no desktop in them, which a port builds on. They depend only on each other, and never on a forbidden library.",
@@ -121,7 +144,9 @@
     ],
     "pending": {
       "_doc": "Engine crates that still take a non-portable crate, until the types they need move down. Entries only go away.",
-      "sunrise-gameplay": ["sunrise-client-lib"]
+      "sunrise-gameplay": [
+        "sunrise-client-lib"
+      ]
     },
     "forbidden": [
       "arboard",

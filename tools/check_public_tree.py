@@ -73,6 +73,11 @@ def prohibited(path):
     # Original JDK-only tools are an exact allowlist; recovered game Java stays private.
     if path in ORIGINAL_JDK_TOOLS:
         return False
+    # Original 1.7.10 oracle probes: they only import the player's own prepared
+    # jars at run time (like tools/jmath_fuzz/VanillaMathFuzz.java) and hold no
+    # game code. Their build output goes to .local, never here.
+    if parsed.suffix == ".java" and path.startswith("tools/javaoracle_1_7_10/"):
+        return False
     # Original Sunrise mod sources may also be tracked.
     # History keeps the paths from before the Sunrise rename (mods/horizon, dev.horizonlab).
     if parsed.suffix == ".java" and path.startswith(("mods/sunrise/src/", "mods/sunrise-lab/src/",

@@ -15,6 +15,7 @@ crates/sunrise-client holds sunrise-client-lib's sources too (its [lib] path rea
 into that tree), so that directory counts for both packages.
 """
 
+import glob
 import json
 import subprocess
 import sys
@@ -74,8 +75,17 @@ def workspace_members():
     members = {}
     for workspace in WORKSPACES:
         table = tomllib.loads((ROOT / workspace / "Cargo.toml").read_text())
-        for member in ([workspace] if "package" in table else []) + [
-                Path(workspace, folder).as_posix() for folder in table["workspace"].get("members", ())]:
+        folders = [Path(workspace, folder).as_posix()
+                   for folder in table["workspace"].get("members", ())]
+        # Cargo's members accept globs (the port's crates live in one, crates/v17/*).
+        expanded = []
+        for folder in folders:
+            if any(ch in folder for ch in "*?["):
+                expanded.extend(sorted(Path(p).parent.as_posix()
+                                       for p in glob.glob(str(ROOT / folder / "Cargo.toml"))))
+            else:
+                expanded.append(folder)
+        for member in ([workspace] if "package" in table else []) + expanded:
             name = tomllib.loads((ROOT / member / "Cargo.toml").read_text())["package"]["name"]
             members[name] = (member, workspace)
     return members
