@@ -1206,12 +1206,26 @@ impl Game<'_> {
         net: NetConfig,
         config: HubConfig,
     ) -> Result<()> {
-        let mut sync = sync::sync_data(
-            &self.options.resources,
-            &self.res.core.item_data,
-            &self.pack_files(),
-        )?;
         let features = self.enabled_feature_ids().to_vec();
+        // A 1.7.10 root has no `registries.json`, recipe folder or synchronized
+        // registry files: the era's server sends no registries, tags or
+        // recipes, and the client plays with the tables it loaded itself.
+        let mut sync = if sunrise_client::sunset17_assets::detect(&self.options.resources) {
+            log::info!(
+                "Sunrise: 1.7.10 has no registries.json; the world sends the era's \
+                 own network ids and no synchronized registries, tags, recipes or \
+                 advancements"
+            );
+            let mut empty = SyncData::era(&self.options.resources);
+            empty.features = features.clone();
+            Arc::new(empty)
+        } else {
+            sync::sync_data(
+                &self.options.resources,
+                &self.res.core.item_data,
+                &self.pack_files(),
+            )?
+        };
         // A world whose packs change biomes sends its own biome registry.
         let packed = self.world_biomes.clone().filter(|b| b.has_packs());
         if packed.is_some()

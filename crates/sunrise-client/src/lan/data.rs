@@ -185,6 +185,80 @@ impl FrozenDamage {
     }
 }
 
+/// A 1.7.10 root's network registry ids: the era has no `registries.json`, so
+/// its own prepared tables number the items and blocks, the era's entities and
+/// player attributes are named, and every other registry is empty. Both sides
+/// of a connection build the same table, so their ids agree.
+pub fn era_builtin(root: &Path) -> Builtin {
+    use sunrise_protocol::registry::Ids;
+    let read = |name: &str| -> Value {
+        std::fs::read(root.join(name))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or(Value::Null)
+    };
+    let names = |value: &Value| -> Vec<String> {
+        let mut names: Vec<String> = value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    // The entities the era's game sends: the era's own `EntityList` names
+    // under the engine's, as far as the engine names a type without
+    // `entity-types.json`.
+    const ENTITY_TYPES: [&str; 13] = [
+        "minecraft:player",
+        "minecraft:item",
+        "minecraft:experience_orb",
+        "minecraft:painting",
+        "minecraft:item_frame",
+        "minecraft:arrow",
+        "minecraft:snowball",
+        "minecraft:egg",
+        "minecraft:ender_pearl",
+        "minecraft:eye_of_ender",
+        "minecraft:firework_rocket",
+        "minecraft:tnt",
+        "minecraft:falling_block",
+    ];
+    let mut registries = HashMap::new();
+    registries.insert(
+        "minecraft:item".into(),
+        Ids::from_names(names(&read("items.json"))),
+    );
+    registries.insert(
+        "minecraft:block".into(),
+        Ids::from_names(names(&read("facts.json")["defaults"])),
+    );
+    registries.insert(
+        "minecraft:entity_type".into(),
+        Ids::from_names(ENTITY_TYPES.iter().map(|id| (*id).to_owned()).collect()),
+    );
+    registries.insert(
+        "minecraft:attribute".into(),
+        Ids::from_names(
+            crate::motion::ERA_PLAYER_ATTRIBUTES
+                .iter()
+                .map(|(id, ..)| (*id).to_owned())
+                .collect(),
+        ),
+    );
+    log::info!(
+        "Sunrise: 1.7.10 has no registries.json; the network numbers its own \
+         {} items, {} blocks, {} entity types and {} attributes; block entity \
+         types, sounds, particles and menus are empty",
+        registries["minecraft:item"].names.len(),
+        registries["minecraft:block"].names.len(),
+        ENTITY_TYPES.len(),
+        crate::motion::ERA_PLAYER_ATTRIBUTES.len(),
+    );
+    Builtin { registries }
+}
+
 pub struct SyncData {
     pub content_identity: Option<[u8; 32]>,
     pub builtin: Builtin,
@@ -435,6 +509,24 @@ impl SyncData {
             ),
             content_identity: None,
         }
+    }
+    /// A 1.7.10 world's wire data: [`Self::empty`] over the era's own network
+    /// ids ([`era_builtin`]). The era has no synchronized registries, tags or
+    /// advancements to send, and its recipe payload says "no recipes" in the
+    /// shape the client decodes.
+    pub fn era(root: &Path) -> Self {
+        let mut sync = Self {
+            builtin: with_custom_stats(era_builtin(root)),
+            ..Self::empty()
+        };
+        let (recipes, buttons) = super::recipes::update_recipes(
+            &BTreeMap::new(),
+            &sync,
+            &crate::crafting::ResolvedSources::default(),
+        );
+        sync.recipes = recipes;
+        sync.stonecutter_buttons = Arc::new(buttons);
+        sync
     }
     pub fn load(
         resources: &Path,
@@ -1301,6 +1393,49 @@ fn changed_dimension_type(name: &str, data: &Tag, levels: &LevelShapes) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1.7.10 root has no `registries.json`: its own tables number the
+    /// network ids, and both ends of a connection (this same function) agree.
+    #[test]
+    fn era_builtin_numbers_the_era_tables_in_one_order() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("items.json"),
+            br#"{"minecraft:stick":{},"minecraft:apple":{},"minecraft:air":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("facts.json"),
+            br#"{"defaults":{"minecraft:stone":1,"minecraft:air":0},"states":[]}"#,
+        )
+        .unwrap();
+        let builtin = era_builtin(root.path());
+        let item = builtin.get("minecraft:item").unwrap();
+        assert_eq!(item.id("minecraft:air"), Some(0));
+        assert_eq!(item.name(0), Some("minecraft:air"));
+        assert_eq!(item.id("minecraft:stick"), Some(2));
+        let block = builtin.get("minecraft:block").unwrap();
+        assert_eq!(block.id("minecraft:stone"), Some(1));
+        assert_eq!(
+            builtin
+                .get("minecraft:entity_type")
+                .unwrap()
+                .id("minecraft:player"),
+            Some(0)
+        );
+        assert_eq!(
+            builtin
+                .get("minecraft:attribute")
+                .unwrap()
+                .id("minecraft:max_health"),
+            Some(0)
+        );
+        // The client's copy and the server's copy are the same numbering.
+        let again = era_builtin(root.path());
+        for (registry, ids) in &builtin.registries {
+            assert_eq!(again.get(registry).unwrap().names, ids.names);
+        }
+    }
 
     fn pack_entries(
         key: &str,

@@ -124,7 +124,15 @@ pub(super) fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>>
         return Some(builtin.clone());
     }
     let builtin = Arc::new(sunrise_client::lan::data::with_custom_stats(
-        Builtin::find(root).and_then(|p| Builtin::load(&p).ok())?,
+        match Builtin::find(root).and_then(|p| Builtin::load(&p).ok()) {
+            Some(builtin) => builtin,
+            // A 1.7.10 root has no `registries.json`: its own tables number
+            // the network ids, as the world's server does (`SyncData::era`).
+            None if sunrise_client::sunset17_assets::detect(root) => {
+                sunrise_client::lan::data::era_builtin(root)
+            }
+            None => return None,
+        },
     ));
     cache.push((root.to_owned(), builtin.clone()));
     Some(builtin)

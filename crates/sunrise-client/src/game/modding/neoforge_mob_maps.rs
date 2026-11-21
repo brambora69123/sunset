@@ -99,6 +99,14 @@ impl Loader<'_, '_> {
         Ok(self.install_and_encode(values, applied, install, encode))
     }
 }
+/// A 1.7.10 world's data maps: the era predates them, so every map and the
+/// mob map snapshot are empty (logged by the caller).
+pub(super) fn empty() -> Loaded {
+    Loaded {
+        values: Vec::new(),
+        snapshot: Arc::new(NeoForgeMobMaps::default()),
+    }
+}
 pub(super) fn load<'a>(
     overlay: &sunrise_world::loot::PackOverlay<'_>,
     tags: impl Fn(&str) -> Option<&'a Tags>,

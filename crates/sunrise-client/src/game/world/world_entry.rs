@@ -255,6 +255,10 @@ impl Game<'_> {
         let _reload = phase
             .reloading()
             .expect("server tables on their owning thread");
+        // A prepared 1.7.10 folder: the era's export carries no 26.3 recipes,
+        // so its world tables take empty recipe sources below, and the builtin
+        // data maps resolve no registry ids.
+        let era = sunrise_client::sunset17_assets::detect(root);
         // The ask of this load, both here and on `/reload`: a native mod
         // recomputes the pack files it contributes every time.
         let mut contributed = Vec::new();
@@ -345,7 +349,15 @@ impl Game<'_> {
         // The recipe tables, the stations and the recipe book read one folder:
         // hold its files so it is read once.
         let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));
-        let sources = if reload {
+        let sources = if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no data/minecraft/recipe; the world's recipe \
+                 sources are empty"
+            );
+            Ok(std::sync::Arc::new(
+                sunrise_client::crafting::ResolvedSources::default(),
+            ))
+        } else if reload {
             lan::sync::prepare_server_sources(root, &self.res.core.item_data, &overlay)
         } else {
             lan::sync::load_sources(
@@ -466,46 +478,64 @@ impl Game<'_> {
         // Items already decoded the root's command export. Block-state-only
         // command metadata is not the registry universe, and professions and
         // biomes belong to the live world candidate rather than that export.
-        for registry in ["minecraft:sound_event", "minecraft:game_event"] {
-            if items.component_registry.ids(registry).is_empty() {
-                return Err(format!(
-                    "builtin data maps require {registry} in command-registries.json"
-                )
-                .into());
+        // A 1.7.10 export has neither `command-registries.json` nor
+        // `registries.json`: the era's builtin data maps are empty, so the
+        // sound and game event universes they would resolve against are too.
+        if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no command-registries.json or registries.json; \
+                 the builtin data maps resolve no registry ids"
+            );
+        } else {
+            for registry in ["minecraft:sound_event", "minecraft:game_event"] {
+                if items.component_registry.ids(registry).is_empty() {
+                    return Err(format!(
+                        "builtin data maps require {registry} in command-registries.json"
+                    )
+                    .into());
+                }
             }
         }
-        let builtin = neoforge_mob_maps::load(
-            &overlay,
-            |directory| {
-                if directory == "item" {
-                    Some(&items.item_tags)
-                } else {
-                    pack_tags.get(directory)
-                }
-            },
-            |registry, id| match registry {
-                "minecraft:item" => items.items.contains_key(id),
-                "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
-                "minecraft:worldgen/biome" => self
-                    .world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .contains(id),
-                "minecraft:entity_type" => {
-                    self.res.mob_types().contains_key(id)
-                        || items
-                            .component_registry
-                            .ids(registry)
-                            .binary_search_by(|known| known.as_str().cmp(id))
-                            .is_ok()
-                }
-                _ => items
-                    .component_registry
-                    .ids(registry)
-                    .binary_search_by(|known| known.as_str().cmp(id))
-                    .is_ok(),
-            },
-        )?;
+        let builtin = if era {
+            log::info!(
+                "Sunrise: 1.7.10 predates NeoForge data maps; every builtin map and \
+                 the mob map snapshot are empty"
+            );
+            neoforge_mob_maps::empty()
+        } else {
+            neoforge_mob_maps::load(
+                &overlay,
+                |directory| {
+                    if directory == "item" {
+                        Some(&items.item_tags)
+                    } else {
+                        pack_tags.get(directory)
+                    }
+                },
+                |registry, id| match registry {
+                    "minecraft:item" => items.items.contains_key(id),
+                    "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
+                    "minecraft:worldgen/biome" => self
+                        .world_biomes
+                        .as_ref()
+                        .unwrap_or_else(|| self.res.biomes())
+                        .contains(id),
+                    "minecraft:entity_type" => {
+                        self.res.mob_types().contains_key(id)
+                            || items
+                                .component_registry
+                                .ids(registry)
+                                .binary_search_by(|known| known.as_str().cmp(id))
+                                .is_ok()
+                    }
+                    _ => items
+                        .component_registry
+                        .ids(registry)
+                        .binary_search_by(|known| known.as_str().cmp(id))
+                        .is_ok(),
+                },
+            )?
+        };
         let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
             .with_builtins(builtin)
             .with_biome_keys(mod_api::__private::BiomeKeys::new(

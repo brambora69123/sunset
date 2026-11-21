@@ -1,5 +1,38 @@
 use super::*;
 
+/// A 1.7.10 root carries neither `damage-catalog.json` nor `data/*/damage_type`:
+/// opening a world on it keeps the era's built-in table instead of failing on
+/// the 26.3-only files.
+#[test]
+fn era_root_world_open_keeps_the_builtin_damage_table() {
+    use sunrise_world::loot::PackOverlay;
+    let root = std::env::temp_dir().join(format!("sunrise-era-damage-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join(crate::sunset17_assets::MANIFEST), b"{}").unwrap();
+    let resources = HealthResources::load_1_7_10().unwrap();
+    let opened = resources
+        .with_packs(&root, &PackOverlay::NONE, false)
+        .unwrap();
+    assert_eq!(
+        opened.damage.id("minecraft:fall"),
+        resources.damage.id("minecraft:fall")
+    );
+    assert_eq!(
+        opened.damage.id("minecraft:stalagmite"),
+        resources.damage.id("minecraft:stalagmite")
+    );
+    assert_eq!((opened.ids.health, opened.ids.absorption), (0, 1));
+    let reloaded = resources
+        .with_packs(&root, &PackOverlay::NONE, true)
+        .unwrap();
+    assert_eq!(
+        reloaded.damage.id("minecraft:fall"),
+        resources.damage.id("minecraft:fall")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 #[ignore = "daily"]
 fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {

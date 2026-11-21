@@ -316,40 +316,67 @@ impl MotionResources {
 ///
 /// `max_health`, `movement_speed`, `attack_damage`, `attack_speed` and
 /// `follow_range` are the era's values; the rest are the 26.3 attributes the
-/// movement, health and interaction code look up, at their vanilla defaults,
-/// so a 1.7.10 player moves and fights with the era's numbers.
+/// movement, health and interaction code look up, at the value that leaves
+/// 1.7.10's behaviour unchanged (drag and friction multipliers of 1, a
+/// burning-time multiplier of 1, no sweeping attack, no reinforcements), so a
+/// 1.7.10 player moves and fights with the era's numbers. The network's
+/// attribute registry numbers this same list, so a client and its server agree
+/// on what an attribute packet names.
+pub(crate) const ERA_PLAYER_ATTRIBUTES: [(&str, f64, f64, f64, bool); 38] = [
+    ("minecraft:max_health", 20.0, 1.0, 1024.0, true),
+    // 1.7.10 has no `max_absorption` attribute: Absorption grants its 4
+    // health per level directly, so the engine's attribute starts unbuffed.
+    ("minecraft:max_absorption", 0.0, 0.0, 2048.0, true),
+    ("minecraft:air_drag_modifier", 1.0, 0.0, 2048.0, true),
+    ("minecraft:friction_modifier", 1.0, 0.0, 2048.0, true),
+    ("minecraft:burning_time", 1.0, 0.0, 1024.0, true),
+    ("minecraft:block_break_speed", 1.0, 0.0, 1024.0, true),
+    ("minecraft:camera_distance", 4.0, 0.0, 64.0, true),
+    (
+        "minecraft:explosion_knockback_resistance",
+        0.0,
+        0.0,
+        1.0,
+        true,
+    ),
+    ("minecraft:name_tag_distance", 64.0, 0.0, 512.0, true),
+    ("minecraft:below_name_distance", 10.0, 0.0, 512.0, true),
+    ("minecraft:submerged_mining_speed", 0.2, 0.0, 20.0, true),
+    ("minecraft:sweeping_damage_ratio", 0.0, 0.0, 1.0, true),
+    ("minecraft:tempt_range", 10.0, 0.0, 2048.0, false),
+    ("minecraft:spawn_reinforcements", 0.0, 0.0, 1.0, false),
+    ("minecraft:bounciness", 0.0, 0.0, 1.0, false),
+    ("minecraft:follow_range", 32.0, 0.0, 2048.0, false),
+    ("minecraft:knockback_resistance", 0.0, 0.0, 1.0, true),
+    ("minecraft:movement_speed", 0.1, 0.0, 1024.0, true),
+    ("minecraft:flying_speed", 0.05, 0.0, 1024.0, true),
+    ("minecraft:attack_damage", 1.0, 0.0, 2048.0, true),
+    ("minecraft:attack_speed", 4.0, 0.0, 1024.0, true),
+    ("minecraft:attack_knockback", 0.0, 0.0, 5.0, true),
+    ("minecraft:armor", 0.0, 0.0, 30.0, true),
+    ("minecraft:armor_toughness", 0.0, 0.0, 20.0, true),
+    ("minecraft:luck", 0.0, -1024.0, 1024.0, true),
+    ("minecraft:scale", 1.0, 0.0625, 16.0, true),
+    ("minecraft:step_height", 0.6, 0.0, 10.0, true),
+    ("minecraft:gravity", 0.08, -1.0, 1.0, true),
+    ("minecraft:jump_strength", 0.42, 0.0, 32.0, true),
+    ("minecraft:safe_fall_distance", 3.0, 0.0, 1024.0, true),
+    ("minecraft:fall_damage_multiplier", 1.0, 0.0, 100.0, true),
+    ("minecraft:oxygen_bonus", 0.0, 0.0, 1024.0, true),
+    ("minecraft:water_movement_efficiency", 0.0, 0.0, 1.0, true),
+    ("minecraft:sneaking_speed", 0.3, 0.0, 1.0, true),
+    ("minecraft:block_interaction_range", 4.5, 0.0, 64.0, true),
+    ("minecraft:entity_interaction_range", 3.0, 0.0, 64.0, true),
+    ("minecraft:mining_efficiency", 0.0, 0.0, 1024.0, true),
+    ("minecraft:movement_efficiency", 0.0, 0.0, 1.0, true),
+];
+/// The era's attribute catalog: [`ERA_PLAYER_ATTRIBUTES`] in the engine's JSON shape.
 fn era_attribute_catalog() -> Result<Catalog> {
     use serde_json::{Map, Value, json};
     let bits = |value: f64| format!("{:016x}", value.to_bits());
-    const PLAYER: [(&str, f64, f64, f64, bool); 24] = [
-        ("minecraft:max_health", 20.0, 1.0, 1024.0, true),
-        ("minecraft:follow_range", 32.0, 0.0, 2048.0, false),
-        ("minecraft:knockback_resistance", 0.0, 0.0, 1.0, true),
-        ("minecraft:movement_speed", 0.1, 0.0, 1024.0, true),
-        ("minecraft:flying_speed", 0.05, 0.0, 1024.0, true),
-        ("minecraft:attack_damage", 1.0, 0.0, 2048.0, true),
-        ("minecraft:attack_speed", 4.0, 0.0, 1024.0, true),
-        ("minecraft:attack_knockback", 0.0, 0.0, 5.0, true),
-        ("minecraft:armor", 0.0, 0.0, 30.0, true),
-        ("minecraft:armor_toughness", 0.0, 0.0, 20.0, true),
-        ("minecraft:luck", 0.0, -1024.0, 1024.0, true),
-        ("minecraft:scale", 1.0, 0.0625, 16.0, true),
-        ("minecraft:step_height", 0.6, 0.0, 10.0, true),
-        ("minecraft:gravity", 0.08, -1.0, 1.0, true),
-        ("minecraft:jump_strength", 0.42, 0.0, 32.0, true),
-        ("minecraft:safe_fall_distance", 3.0, 0.0, 1024.0, true),
-        ("minecraft:fall_damage_multiplier", 1.0, 0.0, 100.0, true),
-        ("minecraft:oxygen_bonus", 0.0, 0.0, 1024.0, true),
-        ("minecraft:water_movement_efficiency", 0.0, 0.0, 1.0, true),
-        ("minecraft:sneaking_speed", 0.3, 0.0, 1.0, true),
-        ("minecraft:block_interaction_range", 4.5, 0.0, 64.0, true),
-        ("minecraft:entity_interaction_range", 3.0, 0.0, 64.0, true),
-        ("minecraft:mining_efficiency", 0.0, 0.0, 1024.0, true),
-        ("minecraft:movement_efficiency", 0.0, 0.0, 1.0, true),
-    ];
-    let mut attributes = Vec::with_capacity(PLAYER.len());
+    let mut attributes = Vec::with_capacity(ERA_PLAYER_ATTRIBUTES.len());
     let mut defaults = Map::new();
-    for (id, default, min, max, syncable) in PLAYER {
+    for &(id, default, min, max, syncable) in &ERA_PLAYER_ATTRIBUTES {
         attributes.push(json!({
             "id": id,
             "default": bits(default),

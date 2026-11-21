@@ -819,11 +819,16 @@ impl HealthResources {
     /// under 26.3's names. A type 1.7.10 never had (`minecraft:stalagmite`,
     /// which `PlayerHealth::new` asks for) is present with no exhaustion.
     pub(crate) fn load_1_7_10() -> Result<Self> {
-        use serde_json::json;
         log::info!(
             "Sunrise: 1.7.10 has no player-float-ids.json or damage_type files; \
              player floats are ids 0 and 1 and the era's damage types are built in"
         );
+        Self::era()
+    }
+    /// The era's built-in damage registry: what [`Self::load_1_7_10`] and a world
+    /// opened on an era root share.
+    fn era() -> Result<Self> {
+        use serde_json::json;
         let bits = |value: f32| format!("{:08x}", value.to_bits());
         // (id, message id, exhaustion, effects, death message type)
         const TYPES: [(&str, &str, f32, &str, &str); 22] = [
@@ -910,6 +915,12 @@ impl HealthResources {
         overlay: &sunrise_world::loot::PackOverlay<'_>,
         reload: bool,
     ) -> Result<Self> {
+        // A 1.7.10 root has neither `damage-catalog.json` nor `data/minecraft/damage_type`:
+        // the era's damage table is built in, so opening a world keeps it instead of
+        // reading the 26.3-only catalog. Its packs cannot add the types either.
+        if crate::sunset17_assets::detect(root) {
+            return Self::era();
+        }
         Ok(Self {
             damage: if reload {
                 self.damage.reload_tags(root, overlay)?
