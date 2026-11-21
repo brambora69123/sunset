@@ -646,6 +646,9 @@ fn is_asset(name: &str) -> bool {
         || texture("assets/minecraft/textures/gui/")
         || texture("assets/minecraft/textures/font/")
         || texture("assets/minecraft/textures/colormap/")
+        // The sky's own pictures: sun, the moon-phase sheet, the vanilla cloud
+        // texture, the End sky. The renderer's celestial pass reads them by path.
+        || texture("assets/minecraft/textures/environment/")
         || name == "assets/minecraft/font/glyph_sizes.bin"
         || name == "assets/minecraft/lang/en_US.lang"
 }
