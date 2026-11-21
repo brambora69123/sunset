@@ -9,6 +9,9 @@ use sunrise_world::{
 };
 
 pub const MATERIALS: [&str; 6] = ["bedrock", "dirt", "stone", "sand", "oak_planks", "bricks"];
+/// The 1.7.10 names of [`MATERIALS`]' layers, in the same order: the era has no
+/// `oak_planks` or `bricks` (they are `planks` metadata 0 and `brick_block`).
+const MATERIALS_1_7_10: [&str; 6] = ["bedrock", "dirt", "stone", "sand", "planks", "brick_block"];
 #[derive(Clone, Copy)]
 pub struct StateFacts {
     air: bool,
@@ -232,7 +235,16 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 impl Assets {
+    /// The block registry and the facts world generation and collisions read.
+    ///
+    /// A prepared 1.7.10 folder ([`crate::sunset17_assets::detect`]) has no 26.3
+    /// manifest and no block-tag bundle; [`Self::load_1_7_10`] builds the same
+    /// table from the era's content export instead. Every other folder takes
+    /// the 26.3 path below unchanged.
     pub fn load(root: &Path) -> Result<Self> {
+        if crate::sunset17_assets::detect(root) {
+            return Self::load_1_7_10(root);
+        }
         let manifest: Value = sunrise_world::json_file::read(&root.join("sunrise-resources.json"))?;
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Sunrise's pinned data version").into());
@@ -313,6 +325,58 @@ impl Assets {
             blocks_fluid_flow,
         })
     }
+    /// [`Assets::load`] for a prepared 1.7.10 root.
+    ///
+    /// The era's export ships `facts.json`, the block registry the engine already
+    /// loads, but none of 26.3's `block-tags.json`: the era never had the tags. The
+    /// three predicates that bundle decides therefore come from 1.7.10's own rules.
+    /// Its `World.getHeight` is one above the highest non-air block, so every
+    /// non-air state counts for the heightmap (leaves included); its fluids flow
+    /// past a block when the block's material blocks movement, which for a state
+    /// means it is neither air nor a fluid. Both are logged: they are the era's
+    /// rules, not 26.3's tags.
+    fn load_1_7_10(root: &Path) -> Result<Self> {
+        log::info!(
+            "Sunrise: {} is a 1.7.10 resource root; loading the era's block tables \
+             (no block-tag bundle: the heightmap counts every non-air block and fluids \
+             flow past every non-air, non-fluid block, as 1.7.10 does)",
+            root.display()
+        );
+        let (registry, flags) = era_registry(root)?;
+        let mut facts = Vec::with_capacity(flags.len());
+        let mut blocks_fluid_flow = BTreeSet::new();
+        for (index, &(air, fluid)) in flags.iter().enumerate() {
+            let state = registry
+                .state(BlockStateId(index as u32))
+                .ok_or_else(|| invalid("missing registry state"))?;
+            if !air && !fluid {
+                blocks_fluid_flow.insert(state.name.clone());
+            }
+            facts.push(StateFacts {
+                air,
+                fluid,
+                air_block: state.name == "minecraft:air",
+                motion: !air,
+                no_leaves: !air,
+            });
+        }
+        let mut material_states = [BlockStateId(0); 6];
+        for (layer, name) in MATERIALS_1_7_10.iter().enumerate() {
+            material_states[layer] = registry
+                .default_state(&format!("minecraft:{name}"))
+                .ok_or_else(|| invalid("missing 1.7.10 test-scene material"))?;
+        }
+        // Chunks hold every state of this registry: content mods can take it
+        // past vanilla's 16-bit global palette.
+        crate::chunk::set_block_states(registry.len());
+        let registry = registry.intern(mod_api::__private::registry_installation_identity());
+        Ok(Self {
+            registry,
+            properties: Properties(Arc::new(facts)),
+            material_states,
+            blocks_fluid_flow,
+        })
+    }
     /// The models and sprites of another resource root over these blocks
     /// (resource packs changed): the registry and block facts come from the
     /// game data, which resource packs do not touch.
@@ -342,6 +406,61 @@ impl Assets {
         RenderAssets::load_with(root, self, false)
     }
 }
+
+/// A 1.7.10 root's block registry from `facts.json`, with two of the era's gaps
+/// filled in place: the modern fluid code (`FluidState::from_block`, and so the
+/// collision registry's liquid rule, the fluid table and the mesher) reads a `level`
+/// property, and the climbing code requires every `minecraft:ladder` state to name a
+/// `facing`. Every liquid state gets `level: "0"` and every ladder state
+/// `facing: "north"`; one value each keeps the states the product of their
+/// properties, which `StateTable` (the block behaviour loader) requires. State ids,
+/// names and the era's own `meta` property are untouched, so the generator's
+/// id → state table still lines up. 1.7.10's flowing liquids are separate blocks
+/// (`minecraft:flowing_water`/`minecraft:flowing_lava`) that the modern fluid model
+/// does not know; they stay non-fluid, logged here.
+fn era_registry(root: &Path) -> Result<(BlockRegistry, Vec<(bool, bool)>)> {
+    let bytes = std::fs::read(root.join("facts.json"))?;
+    let mut facts: Value = serde_json::from_slice(&bytes)?;
+    let (mut levelled, mut faced) = (0, 0);
+    if let Some(states) = facts["states"].as_array_mut() {
+        for row in states {
+            let Some(state) = row.as_array_mut().and_then(|row| row.get_mut(4)) else {
+                continue;
+            };
+            let name = state["id"].as_str().unwrap_or("").to_owned();
+            if matches!(name.as_str(), "minecraft:water" | "minecraft:lava")
+                && let Some(properties) = state["properties"].as_object_mut()
+            {
+                // 1.7.10's `BlockLiquid` metadata is the flow level, but the era
+                // registry already has 16 states per liquid for it: adding the
+                // metadata as a second 16-valued property would make the states
+                // stop being the product of their properties (`StateTable`
+                // refuses that), so every state names source water. The metadata
+                // stays in `meta` for the save and generator paths.
+                properties.insert("level".to_owned(), Value::String("0".to_owned()));
+                levelled += 1;
+            }
+            if name == "minecraft:ladder"
+                && let Some(properties) = state["properties"].as_object_mut()
+            {
+                // `ClimbingRegistry` insists every `minecraft:ladder` state names
+                // a facing; one value keeps the 16 metadata states a valid
+                // property product. The metadata stays in `meta`; ladders all
+                // climb as if on a north wall until the 1.7.10 climbing port lands.
+                properties.insert("facing".to_owned(), Value::String("north".to_owned()));
+                faced += 1;
+            }
+        }
+    }
+    log::info!(
+        "Sunrise: 1.7.10's {levelled} source liquid states got a level property for the 26.3 \
+         fluid code and its {faced} ladder states a north facing for the climbing code; the \
+         era's flowing_water/flowing_lava blocks stay non-fluid"
+    );
+    Ok(BlockRegistry::from_facts_json_bytes(&serde_json::to_vec(
+        &facts,
+    )?)?)
+}
 impl RenderAssets {
     pub fn load(root: &crate::resource_source::ResourceRoot, assets: &Assets) -> Result<Self> {
         Self::load_with(root, assets, true)
@@ -362,6 +481,12 @@ impl RenderAssets {
         draws: bool,
         parsed: Option<crate::model_library::ParsedModels>,
     ) -> Result<Self> {
+        // A prepared 1.7.10 folder has no models: the era registers its textures
+        // file by file, and `load_1_7_10` stitches them. The model library a
+        // caller parsed ahead is the empty one such a root yields.
+        if crate::sunset17_assets::detect(root.prepared()) {
+            return Self::load_1_7_10_with(root, draws);
+        }
         let registry = assets.registry;
         let mut sprites = if draws {
             crate::sprites::Sprites::with_disk_cache(root)
@@ -547,10 +672,63 @@ impl RenderAssets {
     /// asks [`crate::sunset17_assets::block_texture`] for the sprite of an id, metadata and
     /// face. The 26.3 loader ([`RenderAssets::load`]) is untouched.
     pub fn load_1_7_10(root: &crate::resource_source::ResourceRoot) -> Result<Self> {
+        Self::load_1_7_10_with(root, true)
+    }
+
+    /// [`RenderAssets::load_1_7_10`], with or without the sprites' pixels.
+    ///
+    /// A server draws nothing and skips the pixels (`Sprites::for_server`), as the
+    /// 26.3 path does; it still lists the era's files so their layers exist.
+    fn load_1_7_10_with(root: &crate::resource_source::ResourceRoot, draws: bool) -> Result<Self> {
         let era = crate::sunset17_assets::Assets::load(root.prepared())?;
-        let mut sprites = crate::sprites::Sprites::new(root.source().clone());
+        let mut sprites = if draws {
+            crate::sprites::Sprites::new(root.source().clone())
+        } else {
+            crate::sprites::Sprites::for_server(root.source().clone())
+        };
         era.insert_sprites(&mut sprites)?;
-        sprites.finish();
+        // 26.3's fluid and breaking renderers ask for `block/<name>`; the era
+        // registers the same files under `blocks/<name>`. An alias shares the
+        // layer, so the pixels are uploaded once.
+        for name in [
+            "water_still",
+            "water_flow",
+            "lava_still",
+            "lava_flow",
+            "destroy_stage_0",
+            "destroy_stage_1",
+            "destroy_stage_2",
+            "destroy_stage_3",
+            "destroy_stage_4",
+            "destroy_stage_5",
+            "destroy_stage_6",
+            "destroy_stage_7",
+            "destroy_stage_8",
+            "destroy_stage_9",
+        ] {
+            if let Some(&layer) = sprites.layers.get(&format!("minecraft:blocks/{name}")) {
+                sprites
+                    .layers
+                    .insert(format!("minecraft:block/{name}"), layer);
+            }
+        }
+        // 1.7.10 has no separate water overlay sheet: its still water draws with
+        // one sheet and a flat tint. The still sheet keeps the renderer's lookup
+        // working until the fluid renderer gains the era's pass.
+        if let Some(&layer) = sprites.layers.get("minecraft:blocks/water_still") {
+            sprites
+                .layers
+                .insert("minecraft:block/water_overlay".to_owned(), layer);
+            log::info!(
+                "Sunrise: 1.7.10 has no textures/blocks/water_overlay.png; \
+                 water_still serves as the overlay"
+            );
+        }
+        if draws {
+            sprites.finish();
+        } else {
+            sprites.finish_without_pixels();
+        }
         // `finish` grows the buffer by doubling: keep only the bytes in use.
         sprites.pixels.shrink_to_fit();
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

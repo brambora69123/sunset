@@ -246,6 +246,15 @@ pub(super) fn install_registration_data(
 }
 
 fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::registry::Builtin> {
+    // A prepared 1.7.10 folder has no `registries.json`: the era's ids are its
+    // own content export's, not 26.3's registry dump. With no mods reading the
+    // vanilla name lists, an empty catalog serves them.
+    if sunrise_client::sunset17_assets::detect(root) {
+        log::info!(
+            "Sunrise: 1.7.10 has no registries.json; the built-in registry name lists are empty"
+        );
+        return Ok(sunrise_protocol::registry::Builtin::default());
+    }
     let path = sunrise_protocol::registry::Builtin::find(root).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "registries.json not found")
     })?;
@@ -1109,9 +1118,7 @@ pub(in crate::game) fn content_root(
 pub(in crate::game) fn register_iterated_registries(
     root: &std::path::Path,
 ) -> sunrise_client::Result<()> {
-    use sunrise_protocol::registry::Builtin;
-    let path = Builtin::find(root).ok_or("registries.json not found")?;
-    let builtin = Builtin::load(&path)?;
+    let builtin = builtin_registries(root)?;
     if let Some(ids) = builtin.get("minecraft:entity_type") {
         mod_api::__private::resolve_entity_types(
             ids.names
@@ -1138,6 +1145,14 @@ fn register_block_entity_types(
 ) -> sunrise_client::Result<()> {
     use sunrise_client::block_entity_types::{self, BlockEntityTypes};
     use sunrise_protocol::registry::Builtin;
+    // No 26.3 registry dump on a 1.7.10 root, and its mods' content cannot carry
+    // 26.3 block entity ids: nothing to register.
+    if sunrise_client::sunset17_assets::detect(root) {
+        log::info!(
+            "Sunrise: 1.7.10 has no registries.json; no block entity type ids are registered"
+        );
+        return Ok(());
+    }
     let path = Builtin::find(root).ok_or("registries.json not found")?;
     let builtin = Builtin::load(&path)?;
     let names = &builtin

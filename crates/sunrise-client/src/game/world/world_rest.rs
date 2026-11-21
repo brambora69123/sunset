@@ -17,6 +17,11 @@ pub(super) fn load_world_rest(
     draws: bool,
 ) -> Result<WorldRest> {
     let root = resource_root.prepared();
+    // A prepared 1.7.10 folder: the era's export has no 26.3 recipes, entity
+    // types, entity models, animation or creative tables. Each that has an
+    // era equivalent loads from the export; the rest take an empty default,
+    // logged where it is taken.
+    let era = sunrise_client::sunset17_assets::detect(root);
     let facts = resources.facts();
     let biomes = resources.biomes();
     let threads = resources.threads();
@@ -32,6 +37,10 @@ pub(super) fn load_world_rest(
         files: &files,
         priority_layers: &store.priority_layers,
     };
+    // `Behaviours` reads the 26.3 block identity set, its block tags, collision
+    // table and fluid tags by path; a 1.7.10 root has none of them. The loader
+    // refuses that root at its first missing identity (see the PR's report), so
+    // no scratch tables are written for it.
     progress.set(6);
     // Independent tables load together, within the worker budget the settings
     // allow. Only the recipes and the stations read another table: the items.
@@ -46,9 +55,16 @@ pub(super) fn load_world_rest(
         // The recipe tables, the stations and the recipe book read one folder:
         // hold its files so it is read once.
         let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));
-        let sources = startup::time("rest.recipe_sources", || {
-            lan::sync::initial_sources(root, &resources.core.item_data, overlay)
-        })?;
+        let sources = if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no data/minecraft/recipe; the recipe tables are empty"
+            );
+            std::sync::Arc::new(sunrise_client::crafting::ResolvedSources::default())
+        } else {
+            startup::time("rest.recipe_sources", || {
+                lan::sync::initial_sources(root, &resources.core.item_data, overlay)
+            })?
+        };
         let recipes = startup::time("rest.recipes", || {
             Recipes::from_resolved(root, &items, overlay, &sources)
         })?;
@@ -73,20 +89,51 @@ pub(super) fn load_world_rest(
         if !draws {
             return Ok(Default::default());
         }
-        let mut renderer = BlockEntityRenderer::load_with_visibility(
-            resource_root,
-            registry,
-            visibility,
-            resources.item_defaults(),
-        )?;
+        let mut renderer = if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no entity-models.json; the block entity renderer has no models"
+            );
+            BlockEntityRenderer::load_with_visibility_models_and_defaults(
+                resource_root,
+                registry,
+                visibility,
+                Some(&serde_json::Value::Null),
+                resources.item_defaults(),
+            )?
+        } else {
+            BlockEntityRenderer::load_with_visibility(
+                resource_root,
+                registry,
+                visibility,
+                resources.item_defaults(),
+            )?
+        };
         renderer.add_mod_signs(facts, registry);
         Ok(renderer)
     };
-    let load_animate = || resource_tables::load_animate_tables(root, registry, draws, biomes);
+    let load_animate = || {
+        if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no block-tags.json; no block animation tables are built"
+            );
+            return Ok((
+                sunrise_client::animate_tick::AnimateTables::default(),
+                sunrise_client::fog::FogTables::load(root, biomes),
+            ));
+        }
+        resource_tables::load_animate_tables(root, registry, draws, biomes)
+    };
     let load_mobs = || -> Result<_> {
         let _step = startup::step("rest.mobs");
         let catalog = &resources.motion().attributes;
-        let mut types = if draws {
+        let mut types = if era {
+            log::info!(
+                "Sunrise: 1.7.10 has no entity-types.json; no mob types are registered"
+            );
+            MobTypes {
+                types: HashMap::new(),
+            }
+        } else if draws {
             match entity_models {
                 Some(document) => MobTypes::load_with_document_and_defaults(
                     root,

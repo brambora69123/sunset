@@ -497,6 +497,15 @@ pub(super) fn missing_resources(
     get: Option<sunrise_hooks::GetTheGame>,
 ) -> Option<String> {
     let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    // A prepared 1.7.10 folder has no `sunrise-resources.json` and never will:
+    // the era's content export and its extracted assets are the preparation.
+    if crate::sunset17_assets::detect(root) {
+        log::info!(
+            "Sunrise: {} is a prepared 1.7.10 folder; loading the era's resource set",
+            shown.display()
+        );
+        return None;
+    }
     if !root.join("sunrise-resources.json").is_file() {
         let launcher = get.map_or(String::new(), |get| {
             format!(

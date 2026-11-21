@@ -106,7 +106,20 @@ impl GameCpuResources {
                 minecarts::CartModels::load(document)
             });
             let creative_screen = named_scope(scope, "game_cpu.creative", move || {
-                let mut creative = Creative::load(root).map_err(|error| error.to_string())?;
+                let mut creative = if sunrise_client::sunset17_assets::detect(root) {
+                    log::info!(
+                        "Sunrise: 1.7.10 has no creative-inventory.json; the creative screen has no tabs"
+                    );
+                    Creative::from_json(&serde_json::json!({
+                        "schema": 4,
+                        "tabs": [],
+                        "item_features": {},
+                        "potion_features": {},
+                    }))
+                    .map_err(|error| error.to_string())?
+                } else {
+                    Creative::load(root).map_err(|error| error.to_string())?
+                };
                 let tab_modifiers =
                     sunrise_client::polytone_creative_tabs::TabModifier::read_all(root);
                 creative.set_pack_modifiers(tab_modifiers);

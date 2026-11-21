@@ -39,9 +39,9 @@ pub use sunrise_client_render::{
     polytone_creative_tabs, polytone_post, post_chain, potent_sulfur, preedit, providers, pvp,
     pvp_hud, random_source, resource_source, screen_draw, screen_effects, sculk, section_mask,
     server_terrain, settings, shader_options, shader_pack_list, signs, skins, social, sound_engine,
-    sound_events, sound_preview, spans, sprites, streaming, structure_block, tab_list,
-    terrain_model, test_block, test_instance_block, testgen, trims, ui, vault, weather, widgets,
-    world, worldborder, zip,
+    sound_events, sound_preview, spans, sprites, streaming, structure_block, sunset17_assets,
+    tab_list, terrain_model, test_block, test_instance_block, testgen, trims, ui, vault, weather,
+    widgets, world, worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;

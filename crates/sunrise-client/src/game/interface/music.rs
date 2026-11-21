@@ -12,6 +12,11 @@ use sunrise_client::{
 impl Game<'_> {
     /// `Minecraft.tick` -> `MusicManager.tick`, once per client tick.
     pub(super) fn tick_music(&mut self) {
+        // A 1.7.10 root's world tables (the music pools) may not be published:
+        // the title still ticks, silently.
+        if !self.res.rest_ready() {
+            return;
+        }
         let (mut music, mut volume) = self.situational_music();
         // A native mod's own choice of track and volume, then its layers.
         self.native_music(&mut music, &mut volume);

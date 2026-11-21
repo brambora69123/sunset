@@ -7,6 +7,15 @@ impl Game<'_> {
             // mob types), which a client start loads on a background worker: wait for what is
             // left of it here rather than race it.
             self.join_world_rest()?;
+            if !self.res.rest_ready() {
+                // A 1.7.10 root with no world tables: nothing to resolve while
+                // the title is up, and no mods to tell.
+                log::info!(
+                    "Sunrise: no world resources; the entity renderers and client item \
+                     extensions wait for a resource generation that has them"
+                );
+                return Ok(());
+            }
             self.resolve_entity_renderers();
             self.resolve_client_item_extensions()?;
             self.texture_atlases_stitched();

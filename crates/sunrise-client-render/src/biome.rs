@@ -341,6 +341,9 @@ pub fn mod_biome_files(prepared: &std::path::Path) -> Vec<(String, Value)> {
 }
 impl Biomes {
     pub fn load(root: &ResourceRoot) -> Result<Self> {
+        if crate::sunset17_assets::detect(root.prepared()) {
+            return Self::load_1_7_10(root);
+        }
         let maps = Colormaps {
             grass: colormap(root.source(), "grass")?,
             foliage: colormap(root.source(), "foliage")?,
@@ -385,6 +388,55 @@ impl Biomes {
             colormaps: Arc::new(maps),
             packs: BTreeMap::new(),
             files: Arc::new(files_by_name),
+            info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
+            placeholders: Default::default(),
+            exhausted: Default::default(),
+        })
+    }
+    /// The era's colours, and one placeholder biome.
+    ///
+    /// 1.7.10 ships `textures/colormap/{grass,foliage}.png` but no
+    /// `data/minecraft/worldgen/biome` files: the client only needs a name to sample
+    /// the colormaps with. `minecraft:plains` at the era's temperature (0.8) and
+    /// downfall (0.4) is that entry; the ported generator's biome ids all fold onto
+    /// it for now, so every column tints as plains.
+    fn load_1_7_10(root: &ResourceRoot) -> Result<Self> {
+        let grass = colormap(root.source(), "grass")?;
+        let foliage = colormap(root.source(), "foliage")?;
+        let maps = Colormaps {
+            grass,
+            // The era has no dry-foliage colormap; its foliage map answers for the
+            // vanilla fallback the modern game samples.
+            dry: foliage.clone(),
+            foliage,
+        };
+        log::info!(
+            "Sunrise: 1.7.10 has no data/minecraft/worldgen/biome files; \
+             minecraft:plains (temperature 0.8, downfall 0.4) serves every biome lookup"
+        );
+        let plains = serde_json::json!({
+            "temperature": 0.8,
+            "downfall": 0.4,
+            "has_precipitation": true,
+            "attributes": {},
+        });
+        let list = vec![BiomeInfo::from_json(
+            "minecraft:plains".to_owned(),
+            &plains,
+            &maps,
+        )];
+        let index = list
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i as u16))
+            .collect();
+        Ok(Self {
+            builtin: Arc::new(list.clone()),
+            list,
+            index,
+            colormaps: Arc::new(maps),
+            packs: BTreeMap::new(),
+            files: Arc::new(BTreeMap::from([("minecraft:plains".to_owned(), plains)])),
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
             placeholders: Default::default(),
             exhausted: Default::default(),
