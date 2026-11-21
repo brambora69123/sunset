@@ -563,6 +563,7 @@ mod tests {
             cover: [0.0; 6],
         };
         let mut tables = MeshTables {
+            era: None,
             info: vec![
                 air,
                 air,

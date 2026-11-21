@@ -98,6 +98,7 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
         emissive: vec![],
         translucent_layers: vec![false],
         sprite_mips: vec![],
+        era: None,
         pbr_normals: vec![],
         pbr_specular: vec![],
         pbr_size: 1,
@@ -170,6 +171,7 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
         mod_fluids: vec![],
         mod_tints: Default::default(),
         section_geometry: std::sync::Arc::new([]),
+        era: None,
     };
     let maps = path.join("assets/minecraft/textures/colormap");
     std::fs::create_dir_all(&maps).unwrap();
