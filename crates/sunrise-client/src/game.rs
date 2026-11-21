@@ -843,6 +843,9 @@ pub struct PackResources {
     polytone_post: Option<Arc<sunrise_client::polytone_post::PolytonePost>>,
     /// The packs' Polytone custom colours (`polytone/colors.json`).
     polytone_colors: Arc<sunrise_client::pack_palette::PackColors>,
+    /// Whether the content root is 1.7.10's, so the frame draws its HUD and
+    /// container screens instead of 26.3's (`era_ui::ui_era`).
+    era_ui: crate::game::era_ui::UiEra,
 }
 
 /// A quick craft drag as the screen draws it: each dragged slot's count and
@@ -1253,6 +1256,8 @@ struct Game<'a> {
     /// runs normally, so `/tick freeze` holds it and `/tick step` moves it on.
     texture_ticks: u64,
     health_hud: hud_layout::HealthHud,
+    /// `GameGui.prevHealth` for the era HUD's hurt flash.
+    era_hud: era_ui::EraHud,
     /// What ends the game with an error; kept as it is, so main can tell a debug crash.
     error: Option<Box<dyn std::error::Error>>,
     message: Option<(String, Instant)>,
@@ -5017,78 +5022,84 @@ impl Game<'_> {
         self.hud_layer_next = show_hud.then_some(0);
         self.ui.room = self.hud_room(w, h, show_hud);
         let mut guide_from = 0;
+        let era = self.era_ui();
         if show_hud {
             self.draw_spyglass(&mut batch);
             guide_from = batch.vertices.len();
-            // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
-            // extractVehicleHealth and the experience bar, laid out by hud_layout.
-            // Combat feel Legacy hides the attack indicator unless the player keeps it.
-            let indicator = if self.pvp_hides_attack_indicator() {
-                0
+            if era {
+                // 1.7.10's GameGui, over the era's icons and widgets sheets.
+                self.draw_era_hud(&mut batch);
             } else {
-                self.settings.attack_indicator
-            };
-            let delay = sunrise_client::attack_strength::delay(self.main_hand_attack_speed());
-            let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
-            // The 3D crosshair (F3) takes the 2D one's place.
-            // Hud.extractCrosshair: a spectator only sees it over something to open.
-            if self.camera_type.is_first_person()
-                && (!spectator || self.spectator_crosshair())
-                && !self.debug_crosshair()
-                && !self.overlay_holds_view()
-            {
-                let attack = (indicator == 1).then_some(strength);
-                let full = attack.is_some_and(|a| {
-                    hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
-                });
-                let draws = hud_layout::crosshair(wi, hi, attack, full);
-                self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
-                    // The custom crosshair takes the sprite's place (the first draw); the
-                    // attack indicator stays.
-                    if g.custom_crosshair() {
-                        g.draw_custom_crosshair(batch, wi, hi);
-                        hud_layout::paint(batch, &g.gui.atlas, &draws[1..]);
+                // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
+                // extractVehicleHealth and the experience bar, laid out by hud_layout.
+                // Combat feel Legacy hides the attack indicator unless the player keeps it.
+                let indicator = if self.pvp_hides_attack_indicator() {
+                    0
+                } else {
+                    self.settings.attack_indicator
+                };
+                let delay = sunrise_client::attack_strength::delay(self.main_hand_attack_speed());
+                let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
+                // The 3D crosshair (F3) takes the 2D one's place.
+                // Hud.extractCrosshair: a spectator only sees it over something to open.
+                if self.camera_type.is_first_person()
+                    && (!spectator || self.spectator_crosshair())
+                    && !self.debug_crosshair()
+                    && !self.overlay_holds_view()
+                {
+                    let attack = (indicator == 1).then_some(strength);
+                    let full = attack.is_some_and(|a| {
+                        hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
+                    });
+                    let draws = hud_layout::crosshair(wi, hi, attack, full);
+                    self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
+                        // The custom crosshair takes the sprite's place (the first draw); the
+                        // attack indicator stays.
+                        if g.custom_crosshair() {
+                            g.draw_custom_crosshair(batch, wi, hi);
+                            hud_layout::paint(batch, &g.gui.atlas, &draws[1..]);
+                        } else {
+                            hud_layout::paint(batch, &g.gui.atlas, &draws);
+                        }
+                    });
+                }
+                self.gui_layer("minecraft:hotbar", &mut batch, |g, batch| {
+                    if spectator {
+                        g.draw_spectator_hotbar(batch);
                     } else {
-                        hud_layout::paint(batch, &g.gui.atlas, &draws);
+                        let partial = g.clock.fraction() as f32;
+                        let inputs = hud_layout::HotbarInputs {
+                            selected: g.selected as i32,
+                            right_handed: !g.settings.main_hand_left,
+                            offhand: g.offhand.is_some(),
+                            slots: std::array::from_fn(|i| {
+                                g.inventory[i]
+                                    .as_ref()
+                                    .map(|_| (f32::from(g.hotbar_pop[i]) - partial).max(0.0))
+                            }),
+                            offhand_pop: (f32::from(g.hotbar_pop[9]) - partial).max(0.0),
+                            attack: (indicator == 2).then_some(strength),
+                        };
+                        let draws = hud_layout::hotbar(wi, hi, &inputs);
+                        // `extractSlot` for each item, in order, on the path `gui_paint` takes.
+                        let mut items = crate::game::gui_paint_items::HotbarItems { game: g };
+                        hud_layout::paint_items(batch, &g.gui.atlas, &draws, &mut items);
                     }
                 });
+                self.gui_layer("minecraft:effects", &mut batch, |g, batch| {
+                    // The PvP & HUD effects widget takes the icons' place.
+                    if !g.pvp_effects_shown() {
+                        g.draw_effect_icons(batch);
+                    }
+                });
+                // Hud: the action bar and titles draw over the hotbar (nextStratum).
+                self.gui_layer("minecraft:boss_overlay", &mut batch, |g, batch| {
+                    g.draw_boss_bars(batch);
+                });
             }
-            self.gui_layer("minecraft:hotbar", &mut batch, |g, batch| {
-                if spectator {
-                    g.draw_spectator_hotbar(batch);
-                } else {
-                    let partial = g.clock.fraction() as f32;
-                    let inputs = hud_layout::HotbarInputs {
-                        selected: g.selected as i32,
-                        right_handed: !g.settings.main_hand_left,
-                        offhand: g.offhand.is_some(),
-                        slots: std::array::from_fn(|i| {
-                            g.inventory[i]
-                                .as_ref()
-                                .map(|_| (f32::from(g.hotbar_pop[i]) - partial).max(0.0))
-                        }),
-                        offhand_pop: (f32::from(g.hotbar_pop[9]) - partial).max(0.0),
-                        attack: (indicator == 2).then_some(strength),
-                    };
-                    let draws = hud_layout::hotbar(wi, hi, &inputs);
-                    // `extractSlot` for each item, in order, on the path `gui_paint` takes.
-                    let mut items = crate::game::gui_paint_items::HotbarItems { game: g };
-                    hud_layout::paint_items(batch, &g.gui.atlas, &draws, &mut items);
-                }
-            });
-            self.gui_layer("minecraft:effects", &mut batch, |g, batch| {
-                // The PvP & HUD effects widget takes the icons' place.
-                if !g.pvp_effects_shown() {
-                    g.draw_effect_icons(batch);
-                }
-            });
-            // Hud: the action bar and titles draw over the hotbar (nextStratum).
-            self.gui_layer("minecraft:boss_overlay", &mut batch, |g, batch| {
-                g.draw_boss_bars(batch);
-            });
             self.draw_extras(&mut batch);
         }
-        if show_hud {
+        if show_hud && !era {
             // Hud.nextContextualInfoState: the jump bar, the experience bar or
             // the locator bar above the hotbar.
             let has_experience = !self.creative && !spectator;
@@ -11006,6 +11017,7 @@ impl<'a> Game<'a> {
             mod_clear_particles: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
+            era_hud: era_ui::EraHud::default(),
             started: now,
             spectator_gui: Default::default(),
             previous: now,

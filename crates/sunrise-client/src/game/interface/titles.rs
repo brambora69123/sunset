@@ -97,6 +97,7 @@ impl Game<'_> {
         self.tool_highlight
             .tick(held, self.settings.notification_display_time);
         self.tool_highlight.tip = self.highlight_tip();
+        self.tick_era_hud();
     }
     /// `IItemExtension.getHighlightTip` of the selected stack, while its name
     /// shows and a part of its item listens.
