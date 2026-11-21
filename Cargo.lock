@@ -4330,10 +4330,6 @@ dependencies = [
  "sunrise-theme",
  "sunrise-threads",
  "sunrise-world",
- "sunset-1-7-carver",
- "sunset-1-7-chunkgen",
- "sunset-1-7-content",
- "sunset-1-7-features",
  "tempfile",
  "ureq",
  "wgpu",
@@ -4944,6 +4940,8 @@ dependencies = [
  "sha1",
  "sha2",
  "sunrise-core",
+ "sunset-1-7-assets",
+ "sunset-1-7-blocks",
  "zip",
 ]
 
