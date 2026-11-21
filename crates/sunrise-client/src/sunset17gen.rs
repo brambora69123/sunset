@@ -478,71 +478,7 @@ fn state_table(registry: &BlockRegistry) -> Result<Vec<u32>, String> {
 
 /// The client biome table's index for each 1.7.10 biome id.
 fn biome_ids(biomes: &Biomes) -> [u16; 256] {
-    std::array::from_fn(|id| biomes.id(biome_name(id as u8)))
-}
-
-/// The 26.3 name a 1.7.10 biome id plays as.
-///
-/// 1.7.10's hills and mutated biomes were folded into their base biomes by
-/// later versions; they keep the base's name here. `minecraft:plains` is the
-/// fallback for the ids vanilla never generated.
-fn biome_name(id: u8) -> &'static str {
-    match id {
-        0 => "minecraft:ocean",
-        1 => "minecraft:plains",
-        2 => "minecraft:desert",
-        3 => "minecraft:windswept_hills",
-        4 => "minecraft:forest",
-        5 => "minecraft:taiga",
-        6 => "minecraft:swamp",
-        7 => "minecraft:river",
-        8 => "minecraft:nether_wastes",
-        9 => "minecraft:the_end",
-        10 => "minecraft:frozen_ocean",
-        11 => "minecraft:frozen_river",
-        12 => "minecraft:snowy_plains",
-        13 => "minecraft:snowy_taiga",
-        14 | 15 => "minecraft:mushroom_fields",
-        16 => "minecraft:beach",
-        17 => "minecraft:desert",
-        18 => "minecraft:forest",
-        19 => "minecraft:taiga",
-        20 => "minecraft:windswept_hills",
-        21 | 22 => "minecraft:jungle",
-        23 => "minecraft:sparse_jungle",
-        24 => "minecraft:deep_ocean",
-        25 => "minecraft:stony_shore",
-        26 => "minecraft:snowy_beach",
-        27 | 28 => "minecraft:birch_forest",
-        29 => "minecraft:dark_forest",
-        30 | 31 => "minecraft:snowy_taiga",
-        32 | 33 => "minecraft:old_growth_spruce_taiga",
-        34 => "minecraft:windswept_gravelly_hills",
-        35 => "minecraft:savanna",
-        36 => "minecraft:savanna_plateau",
-        37 | 39 => "minecraft:badlands",
-        38 => "minecraft:wooded_badlands",
-        127 => "minecraft:the_void",
-        129 => "minecraft:sunflower_plains",
-        130 => "minecraft:desert",
-        131 => "minecraft:windswept_hills",
-        132 => "minecraft:flower_forest",
-        133 => "minecraft:taiga",
-        134 => "minecraft:swamp",
-        140 => "minecraft:ice_spikes",
-        149 => "minecraft:jungle",
-        151 => "minecraft:sparse_jungle",
-        155 | 156 => "minecraft:birch_forest",
-        157 => "minecraft:dark_forest",
-        158 => "minecraft:snowy_taiga",
-        160 | 161 => "minecraft:old_growth_spruce_taiga",
-        162 => "minecraft:windswept_gravelly_hills",
-        163 | 164 => "minecraft:windswept_savanna",
-        165 => "minecraft:eroded_badlands",
-        166 => "minecraft:wooded_badlands",
-        167 => "minecraft:badlands",
-        _ => "minecraft:plains",
-    }
+    std::array::from_fn(|id| biomes.era_id(id as u8))
 }
 
 #[cfg(test)]

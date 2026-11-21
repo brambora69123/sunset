@@ -1208,13 +1208,13 @@ impl Game<'_> {
     ) -> Result<()> {
         let features = self.enabled_feature_ids().to_vec();
         // A 1.7.10 root has no `registries.json`, recipe folder or synchronized
-        // registry files: the era's server sends no registries, tags or
-        // recipes, and the client plays with the tables it loaded itself.
+        // registry files: the era's server sends only the two world clocks, no tags
+        // or recipes, and the client plays with the tables it loaded itself.
         let mut sync = if sunrise_client::sunset17_assets::detect(&self.options.resources) {
             log::info!(
                 "Sunrise: 1.7.10 has no registries.json; the world sends the era's \
-                 own network ids and no synchronized registries, tags, recipes or \
-                 advancements"
+                 own network ids, its two world clocks and no other synchronized \
+                 registries, tags, recipes or advancements"
             );
             let mut empty = SyncData::era(&self.options.resources);
             empty.features = features.clone();
@@ -1266,6 +1266,13 @@ impl Game<'_> {
             .get(BIOME_REGISTRY)
             .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
             .unwrap_or_default();
+        // A 1.7.10 world sends no biome registry (its client loads the era's own
+        // table): the wire id is the table's index, on both ends.
+        let registry = if registry.is_empty() && world_biomes!(self).is_era() {
+            biome_names.clone()
+        } else {
+            registry
+        };
         let mut encoder = ChunkEncoder::with_signs(
             self.res.facts().states.iter().map(|s| {
                 (

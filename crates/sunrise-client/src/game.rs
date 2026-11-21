@@ -8543,6 +8543,7 @@ impl Game<'_> {
             thunder,
             blend: Some(&blend),
             biome: Some(attributes_of(biome)),
+            biome_temperature: Some(biomes.get(biome).temperature),
             post_blend: Some(&post_blend),
             post_biome: Some(post_of(biome)),
         });

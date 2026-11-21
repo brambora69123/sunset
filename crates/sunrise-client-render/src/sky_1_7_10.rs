@@ -7,11 +7,11 @@
 //! Every constant here is a line of the 1.7.10 source: the names in the comments are that
 //! source's.
 
-/// `Biome.getSkyColor`'s temperature for the era table's one biome.
+/// `Biome.getSkyColor`'s temperature when the caller names no biome: plains',
+/// 0.8, the era's most common sky. [`environment::Environment::sample`] gets the
+/// camera biome's own temperature on a 1.7.10 root.
 ///
-/// 1.7.10 ships no biome files (`Biomes::load_1_7_10`): `minecraft:plains` with the era's
-/// temperature, 0.8, answers every lookup, so that is the temperature its sky colour is
-/// computed with.
+/// [`environment::Environment::sample`]: crate::environment::Environment::sample
 pub const PLAINS_TEMPERATURE: f32 = 0.8;
 
 /// `Dimension.getTimeOfDay(time, partialTick)`: the celestial time, 0 at noon.
@@ -175,6 +175,25 @@ pub fn ambient_darkness(time_of_day: f32, rain: f32, thunder: f32) -> i32 {
     let daylight = daylight(time_of_day);
     let light = daylight * (1.0 - rain * 5.0 / 16.0) * (1.0 - thunder * 5.0 / 16.0);
     ((1.0 - light) * 11.0) as i32
+}
+
+/// `World.calculateAmbientLight`: the day's light, 0.2 at midnight and 1.0 at noon,
+/// scaled by rain and thunder. `GameRenderer.updateLightMap` multiplies the sky's
+/// brightness by `ambient * 0.95 + 0.05`.
+pub fn ambient_light(time_of_day: f32, rain: f32, thunder: f32) -> f32 {
+    // `var3 = 1.0F - (cos(timeOfDay * 2 * PI) * 2.0F + 0.2F)`, clamped, then
+    // `1.0F - var3` and the weather factors.
+    let raw = 1.0 - (math_helper_cos(time_of_day * std::f32::consts::TAU) * 2.0 + 0.2);
+    let light = 1.0 - raw.clamp(0.0, 1.0);
+    let light = light * (1.0 - rain * 5.0 / 16.0);
+    let light = light * (1.0 - thunder * 5.0 / 16.0);
+    light * 0.8 + 0.2
+}
+
+/// The lightmap's sky factor: `GameRenderer.updateLightMap`'s
+/// `calculateAmbientLight * 0.95F + 0.05F`. At noon 1.0, at midnight 0.24.
+pub fn lightmap_sky_factor(time_of_day: f32, rain: f32, thunder: f32) -> f32 {
+    ambient_light(time_of_day, rain, thunder) * 0.95 + 0.05
 }
 
 /// The surface sky light the era's lightmap and fog brightness read: `15 - ambientDarkness`.
@@ -367,6 +386,20 @@ mod tests {
         assert_eq!(moon_phase(0), 0);
         assert_eq!(moon_phase(24_000), 1);
         assert_eq!(moon_phase(-24_000), 7);
+    }
+
+    /// `World.calculateAmbientLight`: 0.2 at midnight, 1.0 at noon, and the lightmap's
+    /// `* 0.95 + 0.05` over it. The lightmap's block term keeps its own curve.
+    #[test]
+    fn the_lightmap_sky_factor_follows_the_eras_ambient_light() {
+        assert!((ambient_light(0.0, 0.0, 0.0) - 1.0).abs() < 1e-6);
+        let midnight = time_of_day(18000);
+        assert!((ambient_light(midnight, 0.0, 0.0) - 0.2).abs() < 1e-6);
+        assert!((lightmap_sky_factor(0.0, 0.0, 0.0) - 1.0).abs() < 1e-6);
+        assert!((lightmap_sky_factor(midnight, 0.0, 0.0) - 0.24).abs() < 1e-6);
+        // Rain and thunder multiply the daylight by `1 - 5/16` each before the 0.8/0.2 mix.
+        let storm = ambient_light(0.0, 1.0, 1.0);
+        assert!((storm - (11.0 / 16.0 * 11.0 / 16.0 * 0.8 + 0.2)).abs() < 1e-6);
     }
 
     #[test]

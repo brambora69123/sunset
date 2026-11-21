@@ -8,6 +8,16 @@ sh tools/javaoracle_1_7_10/build.sh
 sh tools/javaoracle_1_7_10/run.sh PopulateStages 1234 0 0 7
 ```
 
+`BiomeTable` is the one probe whose output is committed: the renderer's era biome table is generated from the classes, not typed by hand.
+
+```sh
+sh tools/javaoracle_1_7_10/run.sh BiomeTable \
+    .local/sunrise-client/1.7.10/assets/minecraft/textures/colormap/grass.png \
+    .local/sunrise-client/1.7.10/assets/minecraft/textures/colormap/foliage.png \
+    > crates/sunrise-client-render/src/biome_1_7_10.rs
+cargo fmt -p sunrise-client-render
+```
+
 The mapped jar keeps `protected` members that were only legal in the obfuscated
 default package, so `Widen.java` rewrites every protected field and method to
 public before the probes compile against it.
@@ -25,6 +35,7 @@ public before the probes compile against it.
 | `DecorateStages` | the biome decorator's own passes, one at a time |
 | `TreeDump` | one tree on a flat platform (`tree seed normal\|ground\|canopy`), save order |
 | `RenderOracle` | the client's `BlockRenderer` vertex stream for a block case (needs the client jar first, which `run.sh` handles) |
+| `BiomeTable` | the 1.7.10 biome table as `crates/sunrise-client-render/src/biome_1_7_10.rs` (needs the client jar: the server's `Biome` has no colours) |
 
 The Rust side of each comparison lives beside the crate it checks:
 `crates/v17/chunkgen/src/bin/{terrain_dump,carved_dump,world_dump,stage_dump}.rs`

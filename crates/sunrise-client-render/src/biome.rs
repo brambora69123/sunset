@@ -21,6 +21,9 @@ pub enum GrassModifier {
     None,
     DarkForest,
     Swamp,
+    /// The era's own fixed `getGrassColor` (the mesa): [`BiomeInfo::grass`] is the colour,
+    /// not a point on the colormaps.
+    Fixed,
 }
 /// A `natural_mob_spawns` / `spawn_overrides` entry list.
 pub fn parse_entries(list: &Value) -> Vec<SpawnEntry> {
@@ -112,6 +115,17 @@ pub struct BiomeInfo {
     /// The biome's environment attributes (`Biome.getAttributes`): its layer in the
     /// environment attribute stack.
     pub attributes: sunrise_world::environment_attributes::AttributeMap,
+    /// A 1.7.10 table's entry: the era's own id (`Biome.id`), the byte a chunk's
+    /// `Biomes` array holds. None for a 26.3 biome, which its file names.
+    pub era_id: Option<u8>,
+    /// `Biome$Height`: the era's `baseHeight` and `heightModifier`. 26.3 biome
+    /// files carry no height; the noise and surface rules own theirs.
+    pub height: Option<[f32; 2]>,
+    /// `Biome.isHumid()`: downfall above 0.85.
+    pub high_humidity: bool,
+    /// `Biome.isCold()`: the biome snows instead of raining. 26.3 spells this
+    /// `temperature_modifier: frozen`, which [`BiomeInfo::frozen`] keeps.
+    pub snowy: bool,
 }
 impl BiomeInfo {
     fn ambient_particles(v: &Value) -> Vec<(ParticleType, f32)> {
@@ -165,6 +179,10 @@ pub struct Biomes {
     pub index: HashMap<String, u16>,
     info_noise: SimplexNoise,
     colormaps: Arc<Colormaps>,
+    /// A 1.7.10 table: each of the era's 256 biome ids as its entry's id, plains
+    /// for every id the era's layers never produce ([`Self::era_id`]). None on a
+    /// 26.3 table, whose ids are the entries' own.
+    era_ids: Option<Box<[u16; 256]>>,
     /// The built-in biomes, the first of `list` unless packs replaced them.
     builtin: Arc<Vec<BiomeInfo>>,
     /// The data packs' biome files (new biomes and replaced built-in ones),
@@ -303,6 +321,10 @@ impl BiomeInfo {
                     Default::default()
                 }),
             name,
+            era_id: None,
+            height: None,
+            high_humidity: downfall > 0.85,
+            snowy: v["temperature_modifier"].as_str() == Some("frozen"),
         }
     }
 }
@@ -313,6 +335,72 @@ pub fn identifier_order(a: &str, b: &str) -> std::cmp::Ordering {
         (path, ns)
     }
     split(a).cmp(&split(b))
+}
+/// The 26.3 name a 1.7.10 biome id plays as, for a table that is not the era's own
+/// ([`Biomes::era_id`]).
+///
+/// 1.7.10's hills and mutated biomes were folded into their base biome by later
+/// versions, so several ids name one modern biome. `minecraft:plains` is the
+/// fallback for the ids vanilla never generated.
+pub fn era_biome_name(id: u8) -> &'static str {
+    match id {
+        0 => "minecraft:ocean",
+        1 => "minecraft:plains",
+        2 => "minecraft:desert",
+        3 => "minecraft:windswept_hills",
+        4 => "minecraft:forest",
+        5 => "minecraft:taiga",
+        6 => "minecraft:swamp",
+        7 => "minecraft:river",
+        8 => "minecraft:nether_wastes",
+        9 => "minecraft:the_end",
+        10 => "minecraft:frozen_ocean",
+        11 => "minecraft:frozen_river",
+        12 => "minecraft:snowy_plains",
+        13 => "minecraft:snowy_taiga",
+        14 | 15 => "minecraft:mushroom_fields",
+        16 => "minecraft:beach",
+        17 => "minecraft:desert",
+        18 => "minecraft:forest",
+        19 => "minecraft:taiga",
+        20 => "minecraft:windswept_hills",
+        21 | 22 => "minecraft:jungle",
+        23 => "minecraft:sparse_jungle",
+        24 => "minecraft:deep_ocean",
+        25 => "minecraft:stony_shore",
+        26 => "minecraft:snowy_beach",
+        27 | 28 => "minecraft:birch_forest",
+        29 => "minecraft:dark_forest",
+        30 | 31 => "minecraft:snowy_taiga",
+        32 | 33 => "minecraft:old_growth_spruce_taiga",
+        34 => "minecraft:windswept_gravelly_hills",
+        35 => "minecraft:savanna",
+        36 => "minecraft:savanna_plateau",
+        37 | 39 => "minecraft:badlands",
+        38 => "minecraft:wooded_badlands",
+        127 => "minecraft:the_void",
+        129 => "minecraft:sunflower_plains",
+        130 => "minecraft:desert",
+        131 => "minecraft:windswept_hills",
+        132 => "minecraft:flower_forest",
+        133 => "minecraft:taiga",
+        134 => "minecraft:swamp",
+        140 => "minecraft:ice_spikes",
+        149 => "minecraft:jungle",
+        151 => "minecraft:sparse_jungle",
+        155 | 156 => "minecraft:birch_forest",
+        157 => "minecraft:dark_forest",
+        158 => "minecraft:snowy_taiga",
+        160 | 161 => "minecraft:old_growth_spruce_taiga",
+        162 => "minecraft:windswept_gravelly_hills",
+        163 | 164 => "minecraft:windswept_savanna",
+        165 => "minecraft:eroded_badlands",
+        166 => "minecraft:wooded_badlands",
+        167 => "minecraft:badlands",
+        // The ids 1.7.10 never generated play as plains, as the era
+        // generator's own table has them.
+        _ => "minecraft:plains",
+    }
 }
 /// The content mods' own biomes (every id outside `minecraft`) from the content root's
 /// `worldgen/biomes.json` bundle (id to file text), in registry order; none when the root has
@@ -386,6 +474,7 @@ impl Biomes {
             list,
             index,
             colormaps: Arc::new(maps),
+            era_ids: None,
             packs: BTreeMap::new(),
             files: Arc::new(files_by_name),
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
@@ -393,54 +482,94 @@ impl Biomes {
             exhausted: Default::default(),
         })
     }
-    /// The era's colours, and one placeholder biome.
+    /// The era's own biome table ([`crate::biome_1_7_10`]).
     ///
-    /// 1.7.10 ships `textures/colormap/{grass,foliage}.png` but no
-    /// `data/minecraft/worldgen/biome` files: the client only needs a name to sample
-    /// the colormaps with. `minecraft:plains` at the era's temperature (0.8) and
-    /// downfall (0.4) is that entry; the ported generator's biome ids all fold onto
-    /// it for now, so every column tints as plains.
+    /// 1.7.10 ships no `data/minecraft/worldgen/biome` files: its biomes are
+    /// `Biome`'s static table, ported by the Java oracle into
+    /// `biome_1_7_10.rs` (temperature, downfall, height, sky, grass and foliage
+    /// colours, water fog and the era's flags). The entries keep the era's ids
+    /// through [`Self::era_id`]; an id no layer produces reads as plains.
     fn load_1_7_10(root: &ResourceRoot) -> Result<Self> {
         let grass = colormap(root.source(), "grass")?;
         let foliage = colormap(root.source(), "foliage")?;
-        let maps = Colormaps {
+        let table = Self::era_table(Colormaps {
             grass,
             // The era has no dry-foliage colormap; its foliage map answers for the
             // vanilla fallback the modern game samples.
             dry: foliage.clone(),
             foliage,
-        };
-        log::info!(
-            "Sunrise: 1.7.10 has no data/minecraft/worldgen/biome files; \
-             minecraft:plains (temperature 0.8, downfall 0.4) serves every biome lookup"
-        );
-        let plains = serde_json::json!({
-            "temperature": 0.8,
-            "downfall": 0.4,
-            "has_precipitation": true,
-            "attributes": {},
         });
-        let list = vec![BiomeInfo::from_json(
-            "minecraft:plains".to_owned(),
-            &plains,
-            &maps,
-        )];
-        let index = list
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (b.name.clone(), i as u16))
-            .collect();
-        Ok(Self {
+        log::info!(
+            "Sunrise: 1.7.10 has no biome files; its own {} biomes (ids 0..=39 and the \
+             mutated 128+ set) are the table",
+            table.list.len()
+        );
+        Ok(table)
+    }
+    /// [`Self::load_1_7_10`]'s table over colormaps a test may leave empty: the
+    /// era's own values are the table's, not the maps'.
+    fn era_table(maps: Colormaps) -> Self {
+        let era = crate::biome_1_7_10::ERA_BIOMES;
+        let mut list = Vec::with_capacity(era.len());
+        let mut index = HashMap::with_capacity(era.len());
+        let mut ids = [u16::MAX; 256];
+        for biome in era {
+            let id = list.len() as u16;
+            ids[usize::from(biome.id)] = id;
+            // 161 is the same `Biome` object as 160, so the names collide; the first
+            // id keeps the name and 161 is still reached by its own id.
+            index.entry(biome.name.to_owned()).or_insert(id);
+            list.push(BiomeInfo {
+                spawns: HashMap::new(),
+                spawn_costs: HashMap::new(),
+                creature_probability: 0.1,
+                increased_fire_burnout: false,
+                name: biome.name.to_owned(),
+                temperature: biome.temperature,
+                frozen: false,
+                downfall: biome.downfall,
+                precipitation: biome.rainy,
+                grass: biome.grass,
+                modifier: biome.modifier,
+                foliage: biome.foliage,
+                dry_foliage: biome.foliage,
+                // 1.7.10's water is not tinted by the biome: its texture carries the colour.
+                water: 0xFF_FFFF,
+                sky: Some(biome.sky),
+                fog: None,
+                water_fog: biome.water_fog,
+                ambient_particles: Vec::new(),
+                features: Vec::new(),
+                attributes: Default::default(),
+                era_id: Some(biome.id),
+                height: Some(biome.height),
+                high_humidity: biome.humid,
+                snowy: biome.snowy,
+            });
+        }
+        // The ids the era's layers never produce: plains, as `Biome.byId` falls back
+        // for an id it has no entry for.
+        let plains = index
+            .get("minecraft:plains")
+            .copied()
+            .expect("the era table carries plains");
+        for id in &mut ids {
+            if *id == u16::MAX {
+                *id = plains;
+            }
+        }
+        Self {
             builtin: Arc::new(list.clone()),
             list,
             index,
             colormaps: Arc::new(maps),
+            era_ids: Some(Box::new(ids)),
             packs: BTreeMap::new(),
-            files: Arc::new(BTreeMap::from([("minecraft:plains".to_owned(), plains)])),
+            files: Arc::new(BTreeMap::new()),
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
             placeholders: Default::default(),
             exhausted: Default::default(),
-        })
+        }
     }
     /// The built-in biomes with a world's data packs' biome files (id →
     /// JSON) over them, as `RegistryDataLoader` builds the registry: a file
@@ -497,10 +626,12 @@ impl Biomes {
         !self.packs.is_empty()
     }
     /// The biome names in the network registry's order: `RegistryDataLoader`
-    /// sorts a registry's files by `Identifier` (path, then namespace).
+    /// sorts a registry's files by `Identifier` (path, then namespace). 161 is the
+    /// same 1.7.10 `Biome` object as 160, so its name is listed once.
     pub fn registry_order(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.list.iter().map(|b| b.name.as_str()).collect();
         names.sort_by(|a, b| identifier_order(a, b));
+        names.dedup();
         names
     }
     pub fn id(&self, name: &str) -> u16 {
@@ -509,6 +640,18 @@ impl Biomes {
             .or_else(|| self.index.get("minecraft:plains"))
             .copied()
             .unwrap_or(0)
+    }
+    /// The engine id a 1.7.10 biome id reads as: its own entry on the era's table
+    /// ([`Self::load_1_7_10`]), else the 26.3 biome the era id plays as.
+    pub fn era_id(&self, id: u8) -> u16 {
+        match &self.era_ids {
+            Some(ids) => ids[usize::from(id)],
+            None => self.id(era_biome_name(id)),
+        }
+    }
+    /// Whether this is a 1.7.10 table ([`Self::load_1_7_10`]).
+    pub fn is_era(&self) -> bool {
+        self.era_ids.is_some()
     }
     /// Whether the game has the biome `name`.
     pub fn contains(&self, name: &str) -> bool {
@@ -542,6 +685,10 @@ impl Biomes {
                 ambient_particles: Vec::new(),
                 features: Vec::new(),
                 attributes: Default::default(),
+                era_id: None,
+                height: None,
+                high_humidity: false,
+                snowy: false,
             });
         }
         self.list.get(usize::from(id)).unwrap_or_else(|| {
@@ -650,7 +797,8 @@ impl Biomes {
     pub fn grass(&self, id: u16, x: f64, z: f64) -> u32 {
         let b = self.get(id);
         match b.modifier {
-            GrassModifier::None => b.grass,
+            // The era's mesa already carries its fixed colour in `grass`.
+            GrassModifier::None | GrassModifier::Fixed => b.grass,
             GrassModifier::DarkForest => ((b.grass & 0xFE_FEFE) + 0x28_340A) >> 1,
             GrassModifier::Swamp => {
                 if f64::from(self.info_noise.get2(x * 0.0225, z * 0.0225)) < -0.1 {
@@ -809,6 +957,7 @@ mod pack_tests {
             placeholders: Default::default(),
             exhausted: Default::default(),
             colormaps: Arc::new(maps),
+            era_ids: None,
             packs: BTreeMap::new(),
             files: Arc::default(),
         }
@@ -911,6 +1060,7 @@ impl Biomes {
             placeholders: Default::default(),
             exhausted: Default::default(),
             colormaps: Arc::new(maps),
+            era_ids: None,
             packs: BTreeMap::new(),
             files: Arc::new(
                 entries
@@ -958,6 +1108,7 @@ mod color_tests {
             placeholders: Default::default(),
             exhausted: Default::default(),
             colormaps: Arc::new(maps),
+            era_ids: None,
             packs: BTreeMap::new(),
             files: Arc::default(),
         }
@@ -1050,6 +1201,7 @@ mod blend_tests {
                 foliage: Vec::new(),
                 dry: Vec::new(),
             }),
+            era_ids: None,
             packs: BTreeMap::new(),
             placeholders: Default::default(),
             exhausted: Default::default(),
@@ -1380,5 +1532,220 @@ mod exhaustion_tests {
         assert_eq!(biomes.ensure_saveable(), Err(BiomeIdExhausted));
         assert!(BiomeIdExhausted.to_string().contains("65536"));
         assert_eq!(biomes.saved_name(65535), "missing:last");
+    }
+}
+
+/// The era's own table (`tools/javaoracle_1_7_10/BiomeTable.java`): the numbers
+/// below are `Biome.java`'s and its subclasses', not a 26.3 biome file's.
+#[cfg(test)]
+mod era_tests {
+    use super::*;
+
+    fn era() -> Biomes {
+        Biomes::era_table(Colormaps {
+            grass: Vec::new(),
+            foliage: Vec::new(),
+            dry: Vec::new(),
+        })
+    }
+
+    /// `Biome.setTemperatureAndDownfall`'s values, the constructor chains of
+    /// `Biome.java`, read from the era's classes.
+    #[test]
+    fn the_era_table_carries_the_biome_classes_climate() {
+        const BASE: [(u8, f32, f32); 40] = [
+            (0, 0.5, 0.5),
+            (1, 0.8, 0.4),
+            (2, 2.0, 0.0),
+            (3, 0.2, 0.3),
+            (4, 0.7, 0.8),
+            (5, 0.25, 0.8),
+            (6, 0.8, 0.9),
+            (7, 0.5, 0.5),
+            (8, 2.0, 0.0),
+            (9, 0.5, 0.5),
+            (10, 0.0, 0.5),
+            (11, 0.0, 0.5),
+            (12, 0.0, 0.5),
+            (13, 0.0, 0.5),
+            (14, 0.9, 1.0),
+            (15, 0.9, 1.0),
+            (16, 0.8, 0.4),
+            (17, 2.0, 0.0),
+            (18, 0.7, 0.8),
+            (19, 0.25, 0.8),
+            (20, 0.2, 0.3),
+            (21, 0.95, 0.9),
+            (22, 0.95, 0.9),
+            (23, 0.95, 0.8),
+            (24, 0.5, 0.5),
+            (25, 0.2, 0.3),
+            (26, 0.05, 0.3),
+            (27, 0.6, 0.6),
+            (28, 0.6, 0.6),
+            (29, 0.7, 0.8),
+            (30, -0.5, 0.4),
+            (31, -0.5, 0.4),
+            (32, 0.3, 0.8),
+            (33, 0.3, 0.8),
+            (34, 0.2, 0.3),
+            (35, 1.2, 0.0),
+            (36, 1.0, 0.0),
+            (37, 2.0, 0.0),
+            (38, 2.0, 0.0),
+            (39, 2.0, 0.0),
+        ];
+        // The mutated set `RegionHillsLayer` may produce (`Biome.byId(id + 128)`).
+        const MUTATED: [(u8, f32, f32); 21] = [
+            (129, 0.8, 0.4),
+            (130, 2.0, 0.0),
+            (131, 0.2, 0.3),
+            (132, 0.7, 0.8),
+            (133, 0.25, 0.8),
+            (134, 0.8, 0.9),
+            (140, 0.0, 0.5),
+            (149, 0.95, 0.9),
+            (151, 0.95, 0.8),
+            (155, 0.6, 0.6),
+            (156, 0.6, 0.6),
+            (157, 0.7, 0.8),
+            (158, -0.5, 0.4),
+            (160, 0.25, 0.8),
+            (161, 0.25, 0.8),
+            (162, 0.2, 0.3),
+            (163, 1.1, 0.0),
+            (164, 1.0, 0.0),
+            (165, 2.0, 0.0),
+            (166, 2.0, 0.0),
+            (167, 2.0, 0.0),
+        ];
+        let biomes = era();
+        for (id, temperature, downfall) in BASE.into_iter().chain(MUTATED) {
+            let info = biomes.get(biomes.era_id(id));
+            assert_eq!(info.era_id, Some(id), "id {id}");
+            assert_eq!(info.temperature, temperature, "id {id} temperature");
+            assert_eq!(info.downfall, downfall, "id {id} downfall");
+        }
+    }
+
+    /// `Biome.getSkyColor(temperature)`: `Color.getHSBColor(0.62222224F -
+    /// temperature / 3 * 0.05F, 0.5F + temperature / 3 * 0.1F, 1.0F)`.
+    #[test]
+    fn the_era_sky_colours_are_the_biome_classes() {
+        let biomes = era();
+        for (id, sky) in [
+            (1u8, 0x79A7FFu32), // Plains, 0.8: the same as the swampland's.
+            (2, 0x6FB2FF),      // Desert, 2.0
+            (4, 0x7AA6FF),      // Forest, 0.7
+            (5, 0x7DA3FF),      // Taiga, 0.25
+            (6, 0x79A7FF),      // Swampland, 0.8
+            (0, 0x7BA5FF),      // Ocean, 0.5
+            (12, 0x80A1FF),     // Ice Plains, 0.0
+            (30, 0x849EFF),     // Cold Taiga, -0.5
+            (9, 0x000000),      // Sky: `TheEndBiome.getSkyColor` returns 0.
+        ] {
+            assert_eq!(biomes.get(biomes.era_id(id)).sky, Some(sky), "id {id}");
+        }
+    }
+
+    /// `GrassColors.getColor`/`FoliageColors.get` at the biome's climate, and the
+    /// classes' own colours where they override the colormaps.
+    #[test]
+    fn the_era_grass_and_foliage_are_the_colormaps_and_their_overrides() {
+        let biomes = era();
+        for (id, grass, foliage) in [
+            (1u8, 0x91BD59u32, 0x77AB2Fu32), // Plains
+            (2, 0xBFB755, 0xAEA42A),         // Desert
+            (4, 0x79C05A, 0x59AE30),         // Forest
+            (5, 0x86B783, 0x68A464),         // Taiga
+            (0, 0x8EB971, 0x71A74D),         // Ocean
+            (12, 0x80B497, 0x60A17B),        // Ice Plains
+            // `SwampBiome.getGrassColor`/`getFoliageColor` ignore the colormaps.
+            (6, 0x6A7039, 0x6A7039),
+            (134, 0x6A7039, 0x6A7039),
+            // `MesaBiome.getGrassColor`/`getFoliageColor` are fixed.
+            (37, 0x90814D, 0x9E814D),
+            (167, 0x90814D, 0x9E814D),
+        ] {
+            let info = biomes.get(biomes.era_id(id));
+            assert_eq!(info.grass, grass, "id {id} grass");
+            assert_eq!(info.foliage, foliage, "id {id} foliage");
+        }
+        // `SwampBiome.getGrassColor`'s noise picks the darker colour only below -0.1,
+        // and `FOLIAGE_NOISE.getValue(0, 0)` is 0.
+        assert_eq!(biomes.grass(biomes.era_id(6), 0.0, 0.0), 0x6A7039);
+        // `ForestBiome.getGrassColor`'s roofed forest:
+        // ((var4 & 16711422) + 2634762) >> 1, over the forest's own grass.
+        assert_eq!(biomes.grass(biomes.era_id(29), 0.0, 0.0), 0x507A32);
+        assert_eq!(biomes.grass(biomes.era_id(157), 0.0, 0.0), 0x507A32);
+        // The mesa's fixed colour passes through `grass` unchanged.
+        assert_eq!(biomes.grass(biomes.era_id(37), 0.0, 0.0), 0x90814D);
+    }
+
+    /// `Biome.waterFogColor` (`LiquidBlock`'s underwater fog) and 1.7.10's
+    /// untinted water.
+    #[test]
+    fn the_era_water_is_untinted_and_the_swamp_fogs_green() {
+        let biomes = era();
+        assert_eq!(biomes.get(biomes.era_id(1)).water, 0xFFFFFF);
+        assert_eq!(biomes.get(biomes.era_id(1)).water_fog, 0xFFFFFF);
+        assert_eq!(biomes.get(biomes.era_id(6)).water_fog, 0xE0FFAE);
+        assert_eq!(biomes.get(biomes.era_id(134)).water_fog, 0xE0FFAE);
+    }
+
+    /// `Biome.isCold()` (snow), the raw `rainy` field (deserts and savannas are
+    /// dry), `Biome.isHumid()` and `Biome$Height`.
+    #[test]
+    fn the_era_flags_and_heights_are_the_biome_classes() {
+        let biomes = era();
+        let info = |id: u8| biomes.get(biomes.era_id(id));
+        assert!(!info(1).snowy && info(1).precipitation && !info(1).high_humidity);
+        assert!(!info(2).precipitation, "the desert disables rain");
+        assert!(!info(35).precipitation, "the savanna disables rain");
+        assert!(info(12).snowy && info(12).precipitation);
+        assert!(info(30).snowy);
+        assert!(info(6).high_humidity, "the swamp's downfall is 0.9");
+        assert_eq!(info(1).height, Some([0.125, 0.05]));
+        assert_eq!(
+            info(20).height,
+            Some([0.8, 0.3]),
+            "diminish(): 1.0*0.8, 0.5*0.6"
+        );
+        assert_eq!(info(140).height, Some([0.425, 0.45000002]));
+        assert_eq!(info(163).height, Some([0.3625, 1.225]));
+    }
+
+    /// Every id the era's layers produce has its own entry; an id they never
+    /// produce reads as plains. 161 is a second alias of 160's `Biome` object.
+    #[test]
+    fn the_era_ids_map_to_their_own_entries() {
+        let biomes = era();
+        assert!(biomes.is_era());
+        for id in 0..=39u8 {
+            assert_eq!(biomes.get(biomes.era_id(id)).era_id, Some(id));
+        }
+        for id in [
+            129u8, 130, 131, 132, 133, 134, 140, 149, 151, 155, 156, 157, 158, 160, 161, 162, 163,
+            164, 165, 166, 167,
+        ] {
+            assert_eq!(biomes.get(biomes.era_id(id)).era_id, Some(id));
+        }
+        for id in [40u8, 126, 127, 128, 135, 148, 150, 159, 168, 255] {
+            assert_eq!(biomes.era_id(id), biomes.era_id(1), "id {id}");
+            assert_eq!(biomes.name(biomes.era_id(id)), "minecraft:plains");
+        }
+        assert_ne!(biomes.era_id(160), biomes.era_id(161));
+        assert_eq!(
+            biomes.name(biomes.era_id(161)),
+            "minecraft:mega_spruce_taiga"
+        );
+        assert_eq!(biomes.id("minecraft:mega_spruce_taiga"), biomes.era_id(160));
+        assert_eq!(biomes.id("minecraft:plains"), biomes.era_id(1));
+        assert_eq!(
+            biomes.registry_order().len(),
+            60,
+            "61 entries, one shared name"
+        );
+        assert!(biomes.registry_order().contains(&"minecraft:plains"));
     }
 }
