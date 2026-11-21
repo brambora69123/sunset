@@ -4330,6 +4330,10 @@ dependencies = [
  "sunrise-theme",
  "sunrise-threads",
  "sunrise-world",
+ "sunset-1-7-carver",
+ "sunset-1-7-chunkgen",
+ "sunset-1-7-content",
+ "sunset-1-7-features",
  "tempfile",
  "ureq",
  "wgpu",
@@ -5230,13 +5234,6 @@ dependencies = [
 
 [[package]]
 name = "sunset-1-7-items"
-version = "0.1.0"
-dependencies = [
- "sunset-1-7-core",
-]
-
-[[package]]
-name = "sunset-1-7-liquids"
 version = "0.1.0"
 dependencies = [
  "sunset-1-7-core",
