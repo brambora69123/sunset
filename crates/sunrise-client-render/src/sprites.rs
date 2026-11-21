@@ -312,6 +312,11 @@ impl Sprites {
     pub fn count(&self) -> usize {
         self.native.len()
     }
+    /// The texture's own edge length before [`Sprites::finish`] resamples every layer to one
+    /// size: a 16 px block texture, a 32 px liquid frame.
+    pub fn native_size(&self, layer: u32) -> Option<u32> {
+        self.native.get(layer as usize).map(|native| native.0)
+    }
     /// `SpriteContents.computeTransparency(u0, v0, u1, v1)` is NONE: every texel under
     /// the quad's UV box is fully opaque in every frame, so the quad needs no alpha test.
     pub fn region_opaque(&self, layer: u32, uv: &[[f32; 2]; 4]) -> bool {

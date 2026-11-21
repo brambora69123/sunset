@@ -281,6 +281,245 @@ fn hex_advance(h: &HexGlyph) -> f32 {
     let width = h.right.saturating_sub(h.left) + 1;
     (width / 2 + 1) as f32
 }
+
+/// 1.7.10's one font (`TextRenderer`): `textures/font/ascii.png` for the basic glyphs, then
+/// the unicode pages with `font/glyph_sizes.bin` for everything else.
+///
+/// The ascii sheet's advances are computed the way the era computed them, by scanning each
+/// glyph cell's columns (`FontRenderer.readFontTexture`), so the same `ascii.png` gives the
+/// same widths. The unicode glyphs draw their page's 16x16 cell at half scale and take their
+/// advance from `glyph_sizes.bin`, as `drawUnicodeGlyph` did. No modern `font/*.json`
+/// definitions exist in this tree, so this replaces them only for a 1.7.10 root.
+fn legacy_1_7_10(
+    source: &ResourceSource,
+    sheets: &HashMap<String, Rect>,
+    pixels: &[u8],
+    atlas: (u32, u32),
+    metrics_only: bool,
+) -> FontSet {
+    let mut providers = Vec::new();
+    if let Some(ascii) = legacy_ascii(source, sheets, pixels, atlas, metrics_only) {
+        // `usesBasicGlyph` is the era's basic-glyph test; the unicode pages serve everything
+        // else. With the "Force Unicode Font" option (uniform), the ascii provider is skipped
+        // and the pages draw every character, as `drawGlyph` did.
+        providers.push(Provider::Bitmap(
+            Filter {
+                uniform: Some(false),
+                jp: None,
+            },
+            ascii,
+        ));
+    }
+    providers.push(Provider::Bitmap(
+        Filter::default(),
+        legacy_unicode(source, sheets, atlas, metrics_only),
+    ));
+    FontSet {
+        providers,
+        glyphs: Default::default(),
+        non_fishy: Default::default(),
+        by_width: None,
+    }
+}
+
+/// The 256 basic glyphs of `textures/font/ascii.png`.
+fn legacy_ascii(
+    source: &ResourceSource,
+    sheets: &HashMap<String, Rect>,
+    pixels: &[u8],
+    atlas: (u32, u32),
+    metrics_only: bool,
+) -> Option<HashMap<char, BitmapGlyph>> {
+    const NAME: &str = "font/ascii";
+    // The sheet and where its pixels are: the atlas rect when the GUI atlas packed it, else
+    // its own file. Metrics-only loads have no atlas, so they decode the file for the widths.
+    let (rgba, sheet_width, sheet_height, origin) = match sheets
+        .get(NAME)
+        .copied()
+        .filter(|_| !pixels.is_empty() && !metrics_only)
+    {
+        Some(rect) => {
+            let (width, height) = rect.texels(atlas);
+            let origin = (
+                (rect.u0 * atlas.0 as f32).round() as u32,
+                (rect.v0 * atlas.1 as f32).round() as u32,
+            );
+            (
+                copy_region(pixels, atlas.0, origin.0, origin.1, width, height)?,
+                width,
+                height,
+                Some(origin),
+            )
+        }
+        None => {
+            let bytes = source
+                .read("assets/minecraft/textures/font/ascii.png")
+                .ok()?;
+            let (width, height, rgba) = crate::hud::decode_bytes(&bytes).ok()?;
+            (rgba, width, height, None)
+        }
+    };
+    if sheet_width == 0 || sheet_height == 0 || sheet_width % 16 != 0 || sheet_height % 16 != 0 {
+        log::warn!("1.7.10 font sheet is {sheet_width}x{sheet_height}, not a 16x16 glyph grid");
+        return None;
+    }
+    let (cell_width, cell_height) = (sheet_width / 16, sheet_height / 16);
+    // `TextRenderer.readFontTexture`'s column scan, over the sheet in ARGB.
+    let argb: Vec<u32> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| {
+            u32::from(p[3]) << 24 | u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2])
+        })
+        .collect();
+    let widths = sunset_1_7_assets::font::compute_char_widths(
+        &argb,
+        sheet_width as usize,
+        sheet_height as usize,
+    );
+    let sheet: Option<Arc<(u32, Vec<u8>)>> = if origin.is_none() && !metrics_only {
+        Some(Arc::new((sheet_width, rgba)))
+    } else {
+        None
+    };
+    let mut glyphs = HashMap::new();
+    for code in 0..256u32 {
+        let ch = char::from_u32(code)?;
+        if ch == ' ' {
+            // `drawGlyph` returns 4 for a space and draws nothing.
+            glyphs.insert(
+                ch,
+                BitmapGlyph::Atlas(Glyph {
+                    rect: None,
+                    left: 0.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    advance: 4.0,
+                    offset: 1.0,
+                }),
+            );
+            continue;
+        }
+        if !sunset_1_7_assets::font::uses_basic_glyph(ch, false) {
+            continue;
+        }
+        let width = u32::from(widths[code as usize]);
+        let x = (code % 16) * cell_width;
+        let y = (code / 16) * cell_height;
+        // The sheet's own cell bounds the sample: a glyph the scan measures 9 wide has its
+        // rightmost column at the cell's edge, and the era's quad read one texel past it. The
+        // atlas packs another sprite there, so stop at the cell and let the 9th texel's sliver
+        // fall away, as it effectively did at the quad's edge.
+        let sample = width.min(cell_width).max(1);
+        // `drawBasicGlyph`: `characterWidths - 1` pixels wide, 7.99 tall, the advance the full
+        // width.
+        let glyph = Glyph {
+            rect: origin
+                .map(|origin| glyph_rect(origin.0 + x, origin.1 + y, sample, cell_height, atlas)),
+            left: 0.0,
+            top: 0.0,
+            right: width as f32 - 1.0,
+            bottom: 7.99,
+            advance: width as f32,
+            offset: 1.0,
+        };
+        let entry = match (&sheet, metrics_only) {
+            (Some(sheet), false) => BitmapGlyph::Sheet(SheetCell {
+                sheet: sheet.clone(),
+                x,
+                y,
+                w: sample,
+                h: cell_height,
+                glyph,
+            }),
+            _ => BitmapGlyph::Atlas(glyph),
+        };
+        glyphs.insert(ch, entry);
+    }
+    Some(glyphs)
+}
+
+/// Copy an atlas region out into a tightly packed RGBA buffer.
+fn copy_region(
+    pixels: &[u8],
+    stride: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity((width * height * 4) as usize);
+    for row in y..y + height {
+        let start = ((row * stride + x) * 4) as usize;
+        out.extend_from_slice(pixels.get(start..start + (width * 4) as usize)?);
+    }
+    Some(out)
+}
+
+/// The unicode pages' glyphs, with the metrics of `font/glyph_sizes.bin`.
+fn legacy_unicode(
+    source: &ResourceSource,
+    sheets: &HashMap<String, Rect>,
+    atlas: (u32, u32),
+    metrics_only: bool,
+) -> HashMap<char, BitmapGlyph> {
+    let Some(sizes) = source
+        .read(crate::sunset17_assets::GLYPH_SIZES)
+        .ok()
+        .and_then(|bytes| sunset_1_7_assets::font::GlyphSizes::from_bytes(bytes).ok())
+    else {
+        return HashMap::new();
+    };
+    let mut glyphs = HashMap::new();
+    for code in 0..=u16::MAX {
+        if !sizes.is_present(code) {
+            continue;
+        }
+        let Some(ch) = char::from_u32(u32::from(code)) else {
+            continue;
+        };
+        let left = u32::from(sizes.left(code));
+        let right = u32::from(sizes.right(code));
+        let width = right + 1 - left;
+        let page = format!("font/unicode_page_{:02x}", u32::from(code) / 256);
+        let rect = match sheets.get(&page).filter(|_| !metrics_only) {
+            Some(rect) => {
+                let origin = (
+                    (rect.u0 * atlas.0 as f32).round() as u32,
+                    (rect.v0 * atlas.1 as f32).round() as u32,
+                );
+                let (page_width, page_height) = rect.texels(atlas);
+                // `drawUnicodeGlyph`: the page is a 16x16 grid of 16 px cells; the glyph's
+                // columns are the nibbles of its `glyph_sizes.bin` byte.
+                (page_width == 256 && page_height == 256).then(|| {
+                    glyph_rect(
+                        origin.0 + (u32::from(code) % 16) * 16 + left,
+                        origin.1 + ((u32::from(code) & 255) / 16) * 16,
+                        width,
+                        16,
+                        atlas,
+                    )
+                })
+            }
+            None => None,
+        };
+        let glyph = Glyph {
+            rect,
+            left: 0.0,
+            top: 0.0,
+            // `var10 = right + 1 - left - 0.02; var10 / 2`.
+            right: (width as f32 - 0.02) / 2.0,
+            bottom: 7.99,
+            advance: width as f32 / 2.0 + 1.0,
+            offset: 1.0,
+        };
+        glyphs.insert(ch, BitmapGlyph::Atlas(glyph));
+    }
+    glyphs
+}
+
 /// `BitmapProvider.Definition.load`: each character's glyph, from the atlas
 /// when the sheet is in it (`pixels` its RGBA), else from the sheet's own
 /// pixels, copied into the atlas when first drawn.
@@ -706,16 +945,23 @@ impl Font {
             uniform: false,
             japanese: false,
         };
-        // FontManager.prepare: every font definition of the resources.
+        // FontManager.prepare: every font definition of the resources. A 1.7.10 root has none:
+        // its single font is the ascii sheet and the unicode pages with `glyph_sizes.bin`.
         let mut ids = font_ids(source);
         ids.sort_by_key(|id| id != DEFAULT);
-        let sets = ids
-            .into_iter()
-            .map(|id| {
-                let set = font.load_set(&id, pixels);
-                (id, set)
-            })
-            .collect();
+        let sets = if ids.is_empty() && crate::sunset17_assets::is_source(source) {
+            vec![(
+                DEFAULT.to_owned(),
+                legacy_1_7_10(source, &font.sheets, pixels, atlas, metrics_only),
+            )]
+        } else {
+            ids.into_iter()
+                .map(|id| {
+                    let set = font.load_set(&id, pixels);
+                    (id, set)
+                })
+                .collect()
+        };
         font.cache.borrow_mut().sets = sets;
         font
     }

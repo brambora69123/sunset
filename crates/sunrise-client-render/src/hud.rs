@@ -1296,10 +1296,28 @@ impl HudAtlas {
         game: &ResourceSource,
         pool: bool,
     ) -> Result<Self> {
+        // 1.7.10 has no atlas definitions, model sprites or font definitions: its GUI is a
+        // folder of screens and its font is `ascii.png` plus the unicode pages.
+        if crate::sunset17_assets::is_source(root) {
+            return Self::build_1_7_10(root, defaults);
+        }
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
         pack_text::load_shaders(&mut atlas, root, game);
+        atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
+            root,
+            atlas.gui.keys(),
+        ));
+        Ok(atlas)
+    }
+    /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens and
+    /// `textures/font` sheets, packed into the same atlas the HUD draws from. Its screens are
+    /// looked up by their era path (`blit_rect("gui/icons")`), and the font is the bitmap one
+    /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
+    pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
+        let mut atlas = Self::pack(root, defaults, &["gui", "font"], false, false)?;
+        pack_text::load_shaders(&mut atlas, root, root);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
             root,
             atlas.gui.keys(),

@@ -32,6 +32,12 @@ sunrise-connected = { path = "../sunrise-connected" }
 sunrise-optifine = { path = "../sunrise-optifine" }
 sunrise-perf-format = { path = "../sunrise-perf-format" }
 sunrise-polytone = { path = "../sunrise-polytone" }
+# 1.7.10's prepared assets: the extraction's manifest and the era's id -> sprite table
+# (`sunset17_assets`). The preparer owns the extraction; the renderer only reads it.
+sunrise-prepare = { path = "../sunrise-prepare" }
+# The era's resource-side contracts the 1.7.10 font reads: the ascii sheet's widths and
+# `glyph_sizes.bin`'s unicode metrics.
+sunset-1-7-assets = { path = "../v17/assets" }
 sunrise-border = { path = "../sunrise-border" }
 sunrise-protocol = { path = "../sunrise-protocol" }
 sunrise-render-core = { path = "../sunrise-render-core" }

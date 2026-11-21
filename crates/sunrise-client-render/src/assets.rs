@@ -537,6 +537,49 @@ impl RenderAssets {
             generation,
         })
     }
+
+    /// The block and item sprites of a prepared 1.7.10 root, stitched into the array the
+    /// renderer consumes.
+    ///
+    /// 1.7.10 registers its textures one file at a time (`textures/blocks`, `textures/items`)
+    /// rather than through block models; [`crate::sunset17_assets::Assets`] adds every one of
+    /// them. The model tables stay empty because the era has no model files: a 1.7.10 mesher
+    /// asks [`crate::sunset17_assets::block_texture`] for the sprite of an id, metadata and
+    /// face. The 26.3 loader ([`RenderAssets::load`]) is untouched.
+    pub fn load_1_7_10(root: &crate::resource_source::ResourceRoot) -> Result<Self> {
+        let era = crate::sunset17_assets::Assets::load(root.prepared())?;
+        let mut sprites = crate::sprites::Sprites::new(root.source().clone());
+        era.insert_sprites(&mut sprites)?;
+        sprites.finish();
+        // `finish` grows the buffer by doubling: keep only the bytes in use.
+        sprites.pixels.shrink_to_fit();
+        let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let models = crate::models::PreparedModels::default();
+        Ok(Self {
+            sprite_size: sprites.size,
+            sprite_minimum_size: sprites.minimum_size,
+            texture_layers: u32::try_from(sprites.count())?,
+            pixels: SpritePixels::new(sprites.pixels),
+            model_catalog: models.catalog,
+            model_library: crate::model_library::ParsedModels::default().into_item_library(),
+            model_placements: models.placements,
+            model_gallery: models.states,
+            animations: sprites.animations,
+            sprite_layers: sprites.layers,
+            file_layers: sprites.files,
+            emissive: Vec::new(),
+            translucent_layers: sprites.translucent,
+            sprite_mips: sprites.mips,
+            pbr_normals: sprites.normals,
+            pbr_specular: sprites.specular,
+            pbr_size: sprites.pbr_size,
+            connected: Default::default(),
+            fusion: Default::default(),
+            mod_animations: Default::default(),
+            mod_pipelines: Default::default(),
+            generation,
+        })
+    }
 }
 
 #[cfg(test)]
