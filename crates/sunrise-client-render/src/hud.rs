@@ -1314,18 +1314,20 @@ impl HudAtlas {
         Ok(atlas)
     }
     /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens,
-    /// `textures/font` sheets and `textures/environment` sky (sun, moon phases, clouds and the
-    /// End sky), packed into the same atlas the HUD draws from. Its screens are looked up by
-    /// their era path (`blit_rect("gui/icons")`), and the font is the bitmap one
-    /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
+    /// `textures/font` sheets, `textures/environment` sky (sun, moon phases, clouds and the
+    /// End sky) and the `textures/entity` sheets the mob pass reads, packed into the same
+    /// atlas the HUD draws from. Its screens are looked up by their era path
+    /// (`blit_rect("gui/icons")`), and the font is the bitmap one ([`crate::font::Font`]
+    /// reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
     pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         let mut atlas = Self::pack(
             root,
             defaults,
-            &["gui", "font", "environment"],
+            &["gui", "font", "environment", "entity"],
             false,
             false,
         )?;
+        crate::sunset17_assets::alias_entity_textures(&mut atlas.sprites);
         // The era's names for the sky bodies: its `environment/sun.png` and the four by two
         // `moon_phases.png` sheet, which the 26.3 sky pass asks for by phase.
         if let Some(sun) = atlas.sprites.get("environment/sun").copied() {

@@ -13,6 +13,7 @@
 pub mod artifacts;
 pub mod assets_1_7_10;
 mod check;
+pub mod entities_1_7_10;
 pub mod exporters;
 pub mod extras;
 mod files;

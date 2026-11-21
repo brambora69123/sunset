@@ -124,7 +124,17 @@ pub(super) fn load_world_rest(
     let load_mobs = || -> Result<_> {
         let _step = startup::step("rest.mobs");
         let catalog = &resources.motion().attributes;
-        let mut types = if era {
+        // A prepared 1.7.10 folder carries the era's own `entity-types.json` and
+        // `entity-models.json` (sunrise-prepare writes both from the era's classes); a folder
+        // without them still boots with no mob types, as before the tables existed.
+        let era_tables = era
+            && root
+                .join(sunrise_client::sunset17_assets::ENTITY_TYPES_FILE)
+                .is_file()
+            && root
+                .join(sunrise_client::sunset17_assets::ENTITY_MODELS_FILE)
+                .is_file();
+        let mut types = if era && !era_tables {
             log::info!("Sunrise: 1.7.10 has no entity-types.json; no mob types are registered");
             MobTypes {
                 types: HashMap::new(),

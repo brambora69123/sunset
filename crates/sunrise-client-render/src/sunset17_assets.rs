@@ -23,7 +23,7 @@
 use crate::{Result, resource_source::ResourceSource, sprites::Sprites};
 use serde::Deserialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 use sunrise_client_core::lang::Language;
@@ -46,6 +46,15 @@ pub use sunrise_prepare::assets_1_7_10::{
 pub use sunrise_prepare::assets_1_7_10::{
     block_has_texture, block_texture, block_textures, item_texture, textureless_blocks,
 };
+/// The era's entity models and types, transcribed from its `Model*` and entity classes.
+pub use sunrise_prepare::entities_1_7_10::{
+    Bone, Cube, EntityType, Model, TextureName, bake_models, bake_types, entity_types, models,
+    textures,
+};
+/// The baked part trees the engine loads with the era's entity types.
+pub use sunrise_prepare::entities_1_7_10::{
+    MODELS as ENTITY_MODELS_FILE, TYPES as ENTITY_TYPES_FILE,
+};
 
 /// Where the 1.7.10 export lives under the Sunrise folder, as the preparer writes it.
 pub const DEFAULT_DIR: &str = sunrise_prepare::assets_1_7_10::DEFAULT_DIR;
@@ -58,6 +67,8 @@ pub const ITEMS_TEXTURES: &str = "assets/minecraft/textures/items/";
 pub const GUI_TEXTURES: &str = "assets/minecraft/textures/gui/";
 /// The font sheets' folder.
 pub const FONT_TEXTURES: &str = "assets/minecraft/textures/font/";
+/// The entity sheets' folder: every model's texture, and the era's player skin.
+pub const ENTITY_TEXTURES: &str = "assets/minecraft/textures/entity/";
 /// `TextRenderer`'s glyph-width table.
 pub const GLYPH_SIZES: &str = "assets/minecraft/font/glyph_sizes.bin";
 /// The era's English language file.
@@ -221,6 +232,11 @@ impl Assets {
         png_paths(&self.files, FONT_TEXTURES)
     }
 
+    /// The entity sheets the extraction has (the player's skin, mob textures, overlays).
+    pub fn entity_texture_files(&self) -> impl Iterator<Item = &str> {
+        png_paths(&self.files, ENTITY_TEXTURES)
+    }
+
     /// Stitch every block and item texture of the era's atlases into the renderer's shared
     /// sprite array.
     ///
@@ -275,6 +291,49 @@ pub fn sprite_layer(sprites: &Sprites, texture: &Texture) -> Option<u32> {
 /// The file a block sprite is extracted to under the prepared folder.
 pub fn block_sprite_path(sprite: &str) -> String {
     format!("{BLOCKS_TEXTURES}{sprite}.png")
+}
+
+/// The HUD atlas's name for an era entity file: `textures/entity/pig/pig.png` is packed as
+/// `entity/pig/pig` (the path below `textures/`, without the extension).
+pub fn entity_sprite(path: &str) -> Option<String> {
+    path.strip_prefix("textures/")?
+        .strip_suffix(".png")
+        .map(str::to_owned)
+}
+
+/// Give the era's entity sheets the 26.3 names the engine's species table asks for.
+///
+/// The HUD atlas packs `textures/entity` under the era's own names (`entity/steve`,
+/// `entity/pig/pig`), while a mob's `MobType` names its sheet the way 26.3 lays it out
+/// (`entity/player/wide/steve`, `entity/pig/pig_temperate`). This points each 26.3 name at
+/// the era's rect, so the species table stays the 26.3 one. Names the era already matches
+/// need no alias, and every one of 26.3's default player skin names draws the era's one skin.
+pub fn alias_entity_textures(sprites: &mut HashMap<String, crate::hud::Rect>) {
+    for texture in textures() {
+        let Some(sprite) = entity_sprite(texture.path) else {
+            continue;
+        };
+        if sprite == texture.name {
+            continue;
+        }
+        if let Some(rect) = sprites.get(&sprite).copied() {
+            sprites.insert(texture.name.to_owned(), rect);
+        }
+    }
+    // 1.7.10 has one default player skin. 26.3's `DefaultPlayerSkin` names eighteen (wide and
+    // slim, nine names each); a player whose offline profile picks any of them draws the era's
+    // sheet. The first-person hand already falls back to `entity/player/wide/steve`, but the
+    // body uses the profile's name, so every one needs the rect.
+    let player_sheet = textures()
+        .iter()
+        .find(|texture| texture.name == "entity/player/wide/steve")
+        .and_then(|texture| entity_sprite(texture.path))
+        .and_then(|sprite| sprites.get(&sprite).copied());
+    if let Some(rect) = player_sheet {
+        for name in crate::tab_list::DEFAULT_SKINS {
+            sprites.insert(name.to_owned(), rect);
+        }
+    }
 }
 
 fn texture_stems<'a>(files: &'a [String], folder: &'a str) -> impl Iterator<Item = &'a str> {
@@ -685,6 +744,56 @@ mod tests {
         assert_eq!(language.get("item.stick.name"), Some("Stick"));
         assert_eq!(language.get("container.inventory"), Some("Inventory"));
         assert_eq!(language.get("gui.done"), Some("Done"));
+    }
+
+    /// The era's own entity sheets are in the HUD atlas under both their era names and the
+    /// 26.3 names the engine's species table asks for. The player's skin and the pig/cow/
+    /// chicken sheets are the ones whose names differ.
+    #[test]
+    fn the_era_entity_sheets_answer_the_engines_names() {
+        let Some(root) = root() else { return };
+        let source = ResourceSource::directory(root);
+        let atlas = HudAtlas::build(&source).unwrap();
+        let rect = |name: &str| {
+            atlas
+                .sprites
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| panic!("{name} is not in the HUD atlas"))
+        };
+        assert_eq!(rect("entity/steve").w, 64);
+        assert_eq!(rect("entity/steve").h, 32);
+        // The engine asks for 26.3's names; the alias points at the era's file.
+        for (engine, era) in [
+            ("entity/player/wide/steve", "entity/steve"),
+            ("entity/player/slim/steve", "entity/steve"),
+            ("entity/player/wide/alex", "entity/steve"),
+            ("entity/player/slim/zuri", "entity/steve"),
+            ("entity/pig/pig_temperate", "entity/pig/pig"),
+            ("entity/cow/cow_temperate", "entity/cow/cow"),
+            ("entity/chicken/chicken_temperate", "entity/chicken"),
+            ("entity/sheep/sheep_wool", "entity/sheep/sheep_fur"),
+        ] {
+            assert_eq!(rect(engine), rect(era), "{engine} does not alias {era}");
+        }
+        // The era's own names that already match stay as they are.
+        for name in [
+            "entity/zombie/zombie",
+            "entity/skeleton/skeleton",
+            "entity/creeper/creeper",
+            "entity/spider/spider",
+        ] {
+            assert!(atlas.sprites.contains_key(name), "{name}");
+        }
+        assert_eq!(
+            entity_sprite("textures/entity/pig/pig.png"),
+            Some("entity/pig/pig".into())
+        );
+        assert_eq!(
+            entity_sprite("textures/gui/icons.png"),
+            Some("gui/icons".into())
+        );
+        assert_eq!(entity_sprite("textures/entity/steve"), None);
     }
 
     #[test]

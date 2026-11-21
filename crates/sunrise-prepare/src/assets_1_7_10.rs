@@ -645,6 +645,7 @@ pub fn prepare(
              was found; pass --sounds-from <store>"
         )),
     }
+    crate::entities_1_7_10::write(&dir, log)?;
     Ok(dir)
 }
 
@@ -957,7 +958,7 @@ const REQUIRED: [&str; 13] = [
     "assets/minecraft/lang/en_US.lang",
 ];
 
-fn is_asset(name: &str) -> bool {
+pub(crate) fn is_asset(name: &str) -> bool {
     let texture = |folder: &str| {
         name.strip_prefix(folder)
             .is_some_and(|rest| rest.ends_with(".png") || rest.ends_with(".png.mcmeta"))
@@ -970,6 +971,8 @@ fn is_asset(name: &str) -> bool {
         // The sky's own pictures: sun, the moon-phase sheet, the vanilla cloud
         // texture, the End sky. The renderer's celestial pass reads them by path.
         || texture("assets/minecraft/textures/environment/")
+        // The entity sheets the era model table names.
+        || texture("assets/minecraft/textures/entity/")
         || name == "assets/minecraft/font/glyph_sizes.bin"
         || name == "assets/minecraft/lang/en_US.lang"
 }
@@ -1208,6 +1211,14 @@ mod tests {
                 "assets/minecraft/textures/entity/steve.png",
                 b"entity".as_slice(),
             ),
+            (
+                "assets/minecraft/textures/entity/pig/pig.png",
+                b"pig".as_slice(),
+            ),
+            (
+                "assets/minecraft/textures/entity/spider_eyes.png",
+                b"eyes".as_slice(),
+            ),
             ("version.json", b"{}".as_slice()),
             ("net/minecraft/world/World.class", b"class".as_slice()),
         ];
@@ -1312,9 +1323,12 @@ mod tests {
         for name in &expected {
             assert!(dir.join(name).is_file(), "{name} was not extracted");
         }
-        assert!(!dir
+        assert!(dir
             .join("assets/minecraft/textures/entity/steve.png")
-            .exists());
+            .is_file());
+        assert!(dir
+            .join("assets/minecraft/textures/entity/pig/pig.png")
+            .is_file());
         assert!(!dir.join("version.json").exists());
         assert!(!dir.join("net/minecraft/world/World.class").exists());
 
@@ -1441,6 +1455,34 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap()
             .contains("asset object store"));
+    }
+
+    /// `prepare` writes the era's entity tables beside the extracted assets, and a second run
+    /// leaves them alone.
+    #[test]
+    fn prepare_writes_the_era_entity_tables() {
+        let (jar, dir, _) = extracted("entity-tables");
+        let log = |_: &str| {};
+        let root = dir.parent().unwrap();
+        let written = prepare(root, Some(&dir), Some(&jar), None, &log).unwrap();
+        assert_eq!(written, dir);
+        let models_path = dir.join(crate::entities_1_7_10::MODELS);
+        let types_path = dir.join(crate::entities_1_7_10::TYPES);
+        let models = crate::read_json(&models_path).unwrap();
+        let player = models.get("minecraft:player#main").unwrap();
+        assert!(player
+            .get("children")
+            .and_then(|children| children.get("head"))
+            .is_some());
+        let types = crate::read_json(&types_path).unwrap();
+        assert!(types.get("minecraft:pig").is_some());
+        let before = fs::read(&models_path).unwrap();
+        prepare(root, Some(&dir), Some(&jar), None, &log).unwrap();
+        assert_eq!(
+            fs::read(&models_path).unwrap(),
+            before,
+            "a second preparation rewrote the entity models"
+        );
     }
 
     #[test]
