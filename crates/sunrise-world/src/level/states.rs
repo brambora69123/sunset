@@ -50,6 +50,10 @@ struct Slot {
     /// The value index of each state of the block, `state.0 - base`: the
     /// division and modulo `index_in` would otherwise do per read.
     indices: Vec<u8>,
+    /// The value is derived from 1.7.10 metadata rather than stored as a
+    /// registry property: `stride` is 0 and `with_index` searches this
+    /// block's states for the one whose metadata encodes the value.
+    derived: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +149,7 @@ impl StateTable {
                     stride,
                     values,
                     indices: Vec::new(),
+                    derived: false,
                 });
             }
             if stride != 1 {
@@ -221,6 +226,53 @@ impl StateTable {
     pub fn key_of(&self, name: &str) -> Option<PropKey> {
         self.keys.get(name).copied()
     }
+    /// Adds a property whose value each state of `block` derives from its
+    /// 1.7.10 metadata instead of storing it as a registry property. `value`
+    /// maps a state's metadata to the property's text; writes through the
+    /// property find this block's state whose metadata encodes the value.
+    ///
+    /// A block that already carries the property is left alone.
+    pub(super) fn install_derived_property(
+        &mut self,
+        block: BlockId,
+        name: &str,
+        value: fn(i32) -> &'static str,
+    ) {
+        let info = &self.blocks[block.0 as usize];
+        if info
+            .slots
+            .iter()
+            .any(|slot| self.key_names[slot.key.0 as usize] == name)
+        {
+            return;
+        }
+        let base = info.base.0;
+        let count = info.count;
+        let meta_key = self.keys.get("meta").copied();
+        let mut values: Vec<PropValue> = Vec::new();
+        let mut indices = Vec::with_capacity(count as usize);
+        for offset in 0..count {
+            let state = BlockStateId(base + offset);
+            let meta = meta_key.map_or(0, |key| self.int(state, key));
+            let text = value(meta);
+            let index = match values.iter().position(|slot| &*slot.text == text) {
+                Some(index) => index,
+                None => {
+                    values.push(PropValue::new(text));
+                    values.len() - 1
+                }
+            };
+            indices.push(index as u8);
+        }
+        let key = self.key_or_insert(name);
+        self.blocks[block.0 as usize].slots.push(Slot {
+            key,
+            stride: 0,
+            values,
+            indices,
+            derived: true,
+        });
+    }
     pub fn state_count(&self) -> usize {
         self.state_block.len()
     }
@@ -293,6 +345,12 @@ impl StateTable {
             .flat_map(|slot| slot.values.iter())
     }
     fn with_index(&self, state: BlockStateId, slot: &Slot, index: u32) -> BlockStateId {
+        if slot.derived {
+            let info = self.info(self.block(state));
+            return (0..info.count as usize)
+                .find(|&offset| slot.indices[offset] as u32 == index)
+                .map_or(state, |offset| BlockStateId(info.base.0 + offset as u32));
+        }
         let current = self.index_in(state, slot);
         BlockStateId(state.0 - current * slot.stride + index * slot.stride)
     }

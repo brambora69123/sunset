@@ -106,6 +106,7 @@ use sunrise_core::{
 pub use block_maps::BlockMaps;
 pub mod classes;
 pub mod data;
+mod era;
 pub mod states;
 pub mod ticks;
 

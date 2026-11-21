@@ -274,8 +274,16 @@ pub enum ItemKind {
 }
 
 /// Resolves a named block, letting the 1.7.10 flowing blocks fall back to the
-/// single fluid block a 26.3 registry has.
-fn resolve_name(table: &StateTable, name: &'static str) -> Option<BlockId> {
+/// single fluid block a 26.3 registry has. An era registry names the flowing
+/// blocks itself, and its other blocks under 1.7.10's names
+/// ([`super::era::block_name`]).
+fn resolve_name(table: &StateTable, name: &'static str, era: bool) -> Option<BlockId> {
+    if era
+        && let Some(mapped) = super::era::block_name(name)
+        && let Some(block) = table.block_by_name(mapped)
+    {
+        return Some(block);
+    }
     table.block_by_name(name).or_else(|| match name {
         "minecraft:flowing_water" => table.block_by_name("minecraft:water"),
         "minecraft:flowing_lava" => table.block_by_name("minecraft:lava"),
@@ -293,7 +301,17 @@ macro_rules! named_blocks {
             const TEST_NAMES: &'static [&'static str] = &[$(concat!("minecraft:", $name),)*];
 
             pub(super) fn resolve(table: &StateTable) -> io::Result<Self> {
-                Ok(Self { $($field: resolve_name(table, concat!("minecraft:", $name))
+                Self::resolve_with(table, false)
+            }
+
+            /// Resolve against a 1.7.10 export: 26.3 names take the era's own
+            /// names or the documented stand-ins in [`super::era::block_name`].
+            pub(super) fn resolve_era(table: &StateTable) -> io::Result<Self> {
+                Self::resolve_with(table, true)
+            }
+
+            fn resolve_with(table: &StateTable, era: bool) -> io::Result<Self> {
+                Ok(Self { $($field: resolve_name(table, concat!("minecraft:", $name), era)
                     .ok_or_else(|| invalid(concat!("missing block ", $name)))?,)* })
             }
         }
@@ -437,6 +455,8 @@ macro_rules! tags {
         #[derive(Clone, Debug, Default)]
         pub struct Tags { $(pub $field: Arc<BlockSet>,)* }
         impl Tags {
+            /// Every tag name the struct carries, `minecraft:`-prefixed.
+            pub const NAMES: &'static [&'static str] = &[$(concat!("minecraft:", $name),)*];
             pub(super) fn resolve(all: &HashMap<String, Arc<BlockSet>>) -> Self {
                 Self { $($field: all.get(concat!("minecraft:", $name)).cloned().unwrap_or_default(),)* }
             }
@@ -746,8 +766,16 @@ fn build_with_gameplay<G: GameplayStateSource>(
     gameplay_states: &[G],
 ) -> io::Result<Behaviours> {
     let mut table = StateTable::new(registry)?;
+    let era = super::era::detect(root, registry);
+    if era {
+        super::era::install_properties(&mut table);
+    }
     let props = Props::resolve(&mut table);
-    let named = Named::resolve(&table)?;
+    let named = if era {
+        Named::resolve_era(&table)?
+    } else {
+        Named::resolve(&table)?
+    };
     let blocks_json = behaviour["blocks"]
         .as_array()
         .ok_or_else(|| fail("missing behaviour blocks"))?;
@@ -775,37 +803,50 @@ fn build_with_gameplay<G: GameplayStateSource>(
         return Err(fail("fluid registry order differs from Sunrise's"));
     }
 
-    let fluid_state_definitions = crate::fluid_definitions::load(behaviour, &fluids)?;
+    let fluid_state_definitions = if era {
+        // The era export carries no 26.3 fluid-state registry; the ported
+        // liquid code reads its fluid level from metadata instead.
+        HashMap::new()
+    } else {
+        crate::fluid_definitions::load(behaviour, &fluids)?
+    };
 
     // Tags.
-    let bundle = read_json(&root.join("block-tags.json"))?;
-    let mut definitions = TagDefinitions::default();
-    for (name, text) in bundle
-        .as_object()
-        .ok_or_else(|| fail("invalid block tag bundle"))?
-    {
-        definitions
-            .apply_json(
-                name,
-                "vanilla",
-                text.as_str()
-                    .ok_or_else(|| fail("invalid block tag text"))?,
-            )
-            .map_err(|e| invalid(e.to_string()))?;
-    }
-    let built = definitions
-        .build(|name, _| table.block_by_name(name).map(|_| name.to_owned()))
-        .map_err(|e| invalid(e.to_string()))?;
-    let mut all_tags = HashMap::new();
-    for (name, members) in &built.tags {
-        let mut set = BlockSet::with_capacity(table.block_count());
-        for member in members {
-            if let Some(block) = table.block_by_name(member) {
-                set.insert(block);
-            }
+    let all_tags = if era {
+        // 1.7.10 has no data-pack tag files; `era::tags` answers the tags the
+        // port consults from the era's block names.
+        super::era::tags(&table)
+    } else {
+        let bundle = read_json(&root.join("block-tags.json"))?;
+        let mut definitions = TagDefinitions::default();
+        for (name, text) in bundle
+            .as_object()
+            .ok_or_else(|| fail("invalid block tag bundle"))?
+        {
+            definitions
+                .apply_json(
+                    name,
+                    "vanilla",
+                    text.as_str()
+                        .ok_or_else(|| fail("invalid block tag text"))?,
+                )
+                .map_err(|e| invalid(e.to_string()))?;
         }
-        all_tags.insert(name.clone(), Arc::new(set));
-    }
+        let built = definitions
+            .build(|name, _| table.block_by_name(name).map(|_| name.to_owned()))
+            .map_err(|e| invalid(e.to_string()))?;
+        let mut all_tags = HashMap::new();
+        for (name, members) in &built.tags {
+            let mut set = BlockSet::with_capacity(table.block_count());
+            for member in members {
+                if let Some(block) = table.block_by_name(member) {
+                    set.insert(block);
+                }
+            }
+            all_tags.insert(name.clone(), Arc::new(set));
+        }
+        all_tags
+    };
     let tags = Tags::resolve(&all_tags);
     let tag = |name: &str| -> Option<Arc<BlockSet>> {
         all_tags
@@ -814,23 +855,53 @@ fn build_with_gameplay<G: GameplayStateSource>(
     };
 
     // Collision shapes.
-    let collision_file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
-    let cached = CachedCollisionRegistry::from_table(collision_file.table("collision")?)?;
     let mut shapes: Vec<VoxelShape> = Vec::new();
     let mut shape_ids = Vec::with_capacity(table.state_count());
-    for id in 0..table.state_count() {
-        let Some(shape) = cached.cached_shape(BlockStateId(id as u32))? else {
-            shape_ids.push(-1);
-            continue;
-        };
-        let index = match shapes.iter().position(|s| s.same_identity(shape)) {
-            Some(index) => index,
-            None => {
-                shapes.push(shape.clone());
-                shapes.len() - 1
-            }
-        };
-        shape_ids.push(index as i32);
+    let cached_collision = if era {
+        None
+    } else {
+        let collision_file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
+        Some(CachedCollisionRegistry::from_table(
+            collision_file.table("collision")?,
+        )?)
+    };
+    if let Some(cached) = &cached_collision {
+        for id in 0..table.state_count() {
+            let Some(shape) = cached.cached_shape(BlockStateId(id as u32))? else {
+                shape_ids.push(-1);
+                continue;
+            };
+            let index = match shapes.iter().position(|s| s.same_identity(shape)) {
+                Some(index) => index,
+                None => {
+                    shapes.push(shape.clone());
+                    shapes.len() - 1
+                }
+            };
+            shape_ids.push(index as i32);
+        }
+    } else {
+        // The era export has no `cached-collision.nbt`: 1.7.10's collision
+        // boxes are rebuilt from its block shapes (`era::collision_shape`).
+        for id in 0..table.state_count() {
+            let state = BlockStateId(id as u32);
+            let row = states_json[id]
+                .as_array()
+                .ok_or_else(|| fail("invalid behaviour state row"))?;
+            let flags = row.get(1).and_then(Value::as_i64).unwrap_or(0) as u32;
+            let collision_empty = flags & state_flags::COLLISION_EMPTY != 0;
+            let full_collision = gameplay_states[id].flag("full_collision");
+            let shape =
+                super::era::collision_shape(&table, state, collision_empty, full_collision)?;
+            let index = match shapes.iter().position(|s| s.same_identity(&shape)) {
+                Some(index) => index,
+                None => {
+                    shapes.push(shape);
+                    shapes.len() - 1
+                }
+            };
+            shape_ids.push(index as i32);
+        }
     }
 
     let shape_info = shapes
@@ -839,39 +910,43 @@ fn build_with_gameplay<G: GameplayStateSource>(
         .collect::<io::Result<Vec<_>>>()?;
 
     // Fluid tags.
-    let mut fluid_definitions = TagDefinitions::default();
-    let fluid_dir = root.join("data/minecraft/tags/fluid");
-    for entry in fs::read_dir(&fluid_dir)? {
-        let path = entry?.path();
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        fluid_definitions
-            .apply_json(
-                &format!("minecraft:{stem}"),
-                "vanilla",
-                &fs::read_to_string(&path)?,
-            )
+    let fluid_tags = if era {
+        super::era::fluid_tags()
+    } else {
+        let mut fluid_definitions = TagDefinitions::default();
+        let fluid_dir = root.join("data/minecraft/tags/fluid");
+        for entry in fs::read_dir(&fluid_dir)? {
+            let path = entry?.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            fluid_definitions
+                .apply_json(
+                    &format!("minecraft:{stem}"),
+                    "vanilla",
+                    &fs::read_to_string(&path)?,
+                )
+                .map_err(|e| invalid(e.to_string()))?;
+        }
+        let fluid_built = fluid_definitions
+            .build(|name, _| FluidKind::from_name(name).and_then(FluidKind::vanilla_index))
             .map_err(|e| invalid(e.to_string()))?;
-    }
-    let fluid_built = fluid_definitions
-        .build(|name, _| FluidKind::from_name(name).and_then(FluidKind::vanilla_index))
-        .map_err(|e| invalid(e.to_string()))?;
-    let fluid_mask = |name: &str| -> u8 {
-        fluid_built
-            .tags
-            .get(name)
-            .into_iter()
-            .flatten()
-            .fold(0, |mask, kind| mask | 1 << kind)
-    };
-    let fluid_tags = FluidTags {
-        water: fluid_mask("minecraft:water"),
-        lava: fluid_mask("minecraft:lava"),
-        supports_frogspawn: fluid_mask("minecraft:supports_frogspawn"),
-        supports_lily_pad: fluid_mask("minecraft:supports_lily_pad"),
-        supports_sugar_cane_adjacently: fluid_mask("minecraft:supports_sugar_cane_adjacently"),
-        bubble_column_can_occupy: fluid_mask("minecraft:bubble_column_can_occupy"),
+        let fluid_mask = |name: &str| -> u8 {
+            fluid_built
+                .tags
+                .get(name)
+                .into_iter()
+                .flatten()
+                .fold(0, |mask, kind| mask | 1 << kind)
+        };
+        FluidTags {
+            water: fluid_mask("minecraft:water"),
+            lava: fluid_mask("minecraft:lava"),
+            supports_frogspawn: fluid_mask("minecraft:supports_frogspawn"),
+            supports_lily_pad: fluid_mask("minecraft:supports_lily_pad"),
+            supports_sugar_cane_adjacently: fluid_mask("minecraft:supports_sugar_cane_adjacently"),
+            bubble_column_can_occupy: fluid_mask("minecraft:bubble_column_can_occupy"),
+        }
     };
 
     // Per-state facts.
@@ -935,10 +1010,12 @@ fn build_with_gameplay<G: GameplayStateSource>(
             push,
             instrument: instrument_index(row.get(8).and_then(Value::as_str).unwrap_or("HARP")),
             shape: shape_ids[id],
-            collision_offset: cached.offset_limits(
-                BlockStateId(id as u32),
-                crate::collision::ShapeChannel::Collision,
-            ),
+            collision_offset: cached_collision.as_ref().and_then(|cached| {
+                cached.offset_limits(
+                    BlockStateId(id as u32),
+                    crate::collision::ShapeChannel::Collision,
+                )
+            }),
         });
     }
 
@@ -962,15 +1039,24 @@ fn build_with_gameplay<G: GameplayStateSource>(
         }
         let mut classes = ClassSet::default();
         let mut chain = Vec::new();
+        let class_from_java = |java: &str| {
+            if era {
+                super::era::class_from_java(java)
+            } else {
+                Class::from_java(java)
+            }
+        };
         for java in json["class"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
         {
-            if let Some(c) = Class::from_java(java) {
+            if let Some(c) = class_from_java(java) {
                 classes.insert(c);
-                chain.push(c);
+                if !chain.contains(&c) {
+                    chain.push(c);
+                }
             }
         }
         let class = chain.first().copied().unwrap_or(Class::Block);
@@ -1653,6 +1739,7 @@ impl GameplayStateSource for Value {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A 26.3 registry has one water block and one lava block; the 1.7.10
     /// liquid code names the flowing blocks separately, so they resolve to
@@ -1680,5 +1767,248 @@ mod tests {
         let named = Named::resolve(&table).unwrap();
         assert_eq!(named.flowing_water, named.water);
         assert_eq!(named.flowing_lava, named.lava);
+    }
+
+    /// A prepared 1.7.10 root has the era's names, one `meta` property and
+    /// none of the 26.3 data-pack tables. `Behaviours::load` must resolve the
+    /// named blocks to the era's names (or the documented stand-ins), rebuild
+    /// collision and tags from the export, and read metadata properties.
+    #[test]
+    fn an_era_root_loads_from_the_1_7_10_export() {
+        use super::super::era;
+
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-era-behaviours-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(era::MANIFEST), b"{}").unwrap();
+
+        // Every block `Named` needs, plus the blocks whose metadata-backed
+        // properties this test reads.
+        let mut names: Vec<&'static str> = Vec::new();
+        for &named in Named::TEST_NAMES {
+            let mapped = era::block_name(named).expect("every named block has an era mapping");
+            if !names.contains(&mapped) {
+                names.push(mapped);
+            }
+        }
+        for extra in [
+            "minecraft:oak_stairs",
+            "minecraft:stone_slab",
+            "minecraft:log",
+            "minecraft:wheat",
+            "minecraft:farmland",
+            "minecraft:redstone_wire",
+            "minecraft:leaves",
+        ] {
+            if !names.contains(&extra) {
+                names.push(extra);
+            }
+        }
+
+        let mut defaults = serde_json::Map::new();
+        let mut facts_states = Vec::new();
+        let mut behaviour_blocks = Vec::new();
+        let mut behaviour_states = Vec::new();
+        let mut gameplay_states = Vec::new();
+        for &name in &names {
+            defaults.insert(name.into(), json!(facts_states.len()));
+            let chain = if name.ends_with("_stairs") {
+                json!(["StairsBlock", "Block"])
+            } else {
+                json!(["Block"])
+            };
+            behaviour_blocks.push(json!({"name": name, "class": chain, "fields": {}}));
+            let liquid = match name {
+                "minecraft:flowing_water" => Some((1, true)),
+                "minecraft:water" => Some((2, false)),
+                "minecraft:flowing_lava" => Some((3, true)),
+                "minecraft:lava" => Some((4, false)),
+                _ => None,
+            };
+            let solid = liquid.is_none()
+                && name != "minecraft:air"
+                && !name.ends_with("_stairs")
+                && name != "minecraft:stone_slab";
+            for meta in 0..16 {
+                // The client's era registry adds a constant `level` to the
+                // source liquid states for the 26.3 fluid code.
+                let mut properties = json!({"meta": meta.to_string()});
+                if matches!(name, "minecraft:water" | "minecraft:lava") {
+                    properties["level"] = json!("0");
+                }
+                facts_states.push(json!([
+                    name,
+                    name == "minecraft:air",
+                    liquid.is_some(),
+                    "",
+                    {"id": name, "properties": properties},
+                ]));
+                let (kind, falling) = liquid
+                    .map(|(kind, _)| (kind, meta >= 8))
+                    .unwrap_or((0, false));
+                let level = if meta & 7 == 0 { 8 } else { 8 - (meta & 7) };
+                behaviour_states.push(json!([0, 0, kind, level, falling, 0, 0, 0, "HARP"]));
+                gameplay_states.push(json!({"full_collision": solid}));
+            }
+        }
+        let facts = json!({"states": facts_states, "defaults": defaults});
+        let behaviour = json!({
+            "blocks": behaviour_blocks,
+            "states": behaviour_states,
+            "items": {},
+            "fluids": [
+                "minecraft:empty",
+                "minecraft:flowing_water",
+                "minecraft:water",
+                "minecraft:flowing_lava",
+                "minecraft:lava",
+            ],
+            "fire": {},
+        });
+        std::fs::write(dir.join("facts.json"), facts.to_string()).unwrap();
+        std::fs::write(dir.join("block-behaviours.json"), behaviour.to_string()).unwrap();
+        std::fs::write(
+            dir.join("gameplay-facts.json"),
+            json!({"states": gameplay_states}).to_string(),
+        )
+        .unwrap();
+
+        let registry = BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap();
+        let behaviours = load(&registry, &dir).expect("the era export loads");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            behaviours
+                .table
+                .info(behaviours.named.grass_block)
+                .name
+                .as_ref(),
+            "minecraft:grass"
+        );
+        assert_eq!(
+            behaviours
+                .table
+                .info(behaviours.named.snow_block)
+                .name
+                .as_ref(),
+            "minecraft:snow"
+        );
+        assert_eq!(
+            behaviours.table.info(behaviours.named.snow).name.as_ref(),
+            "minecraft:snow_layer"
+        );
+        assert_eq!(behaviours.named.cave_air, behaviours.named.air);
+        assert_eq!(behaviours.named.void_air, behaviours.named.air);
+        assert_eq!(
+            behaviours
+                .table
+                .info(behaviours.named.sugar_cane)
+                .name
+                .as_ref(),
+            "minecraft:reeds"
+        );
+
+        let logs = behaviours.tag("minecraft:logs").expect("era logs tag");
+        let log = behaviours.table.block_by_name("minecraft:log").unwrap();
+        assert!(logs.contains(log));
+
+        let stairs = behaviours
+            .table
+            .block_by_name("minecraft:oak_stairs")
+            .unwrap();
+        let north = behaviours.table.with_text(
+            behaviours.table.default_state(stairs),
+            behaviours.props.facing,
+            "north",
+        );
+        assert_eq!(
+            behaviours
+                .table
+                .text(north.unwrap(), behaviours.props.facing),
+            "north"
+        );
+        let top = behaviours.table.with_text(
+            behaviours.table.default_state(stairs),
+            behaviours.props.half,
+            "top",
+        );
+        assert_eq!(
+            behaviours.table.text(top.unwrap(), behaviours.props.half),
+            "top"
+        );
+        assert!(behaviours.block_data(stairs).is(Class::Stair));
+
+        let log_block = behaviours.table.block_by_name("minecraft:log").unwrap();
+        let x_axis = behaviours
+            .table
+            .with_text(
+                behaviours.table.default_state(log_block),
+                behaviours.props.axis,
+                "x",
+            )
+            .unwrap();
+        assert_eq!(behaviours.table.text(x_axis, behaviours.props.axis), "x");
+
+        let wire = behaviours
+            .table
+            .block_by_name("minecraft:redstone_wire")
+            .unwrap();
+        let powered = behaviours
+            .table
+            .with_int(
+                behaviours.table.default_state(wire),
+                behaviours.props.power,
+                7,
+            )
+            .unwrap();
+        assert_eq!(behaviours.table.int(powered, behaviours.props.power), 7);
+
+        let air = behaviours.table.default_state(behaviours.named.air);
+        assert!(behaviours.collision_shape(air).unwrap().is_empty());
+        let stone = behaviours.table.default_state(behaviours.named.stone);
+        assert!(
+            behaviours
+                .collision_shape(stone)
+                .unwrap()
+                .same_identity(&VoxelShape::block())
+        );
+        let slab = behaviours
+            .table
+            .block_by_name("minecraft:stone_slab")
+            .unwrap();
+        let bottom = behaviours
+            .collision_shape(behaviours.table.default_state(slab))
+            .unwrap();
+        assert!(!bottom.is_empty());
+
+        let water = behaviours.table.default_state(behaviours.named.water);
+        let fluid = behaviours.fluid(water);
+        assert_eq!(fluid.kind(), FluidKind::Water);
+        assert_eq!(
+            behaviours.table.name(behaviours.legacy_block(fluid)),
+            "minecraft:water"
+        );
+        let flowing = behaviours
+            .table
+            .block_by_name("minecraft:flowing_water")
+            .unwrap();
+        let flowing = behaviours
+            .table
+            .with_int(
+                behaviours.table.default_state(flowing),
+                behaviours.props.meta,
+                1,
+            )
+            .unwrap();
+        let fluid = behaviours.fluid(flowing);
+        assert_eq!(fluid.kind(), FluidKind::FlowingWater);
+        let legacy = behaviours.legacy_block(fluid);
+        assert_eq!(behaviours.table.name(legacy), "minecraft:flowing_water");
+        assert_eq!(behaviours.table.int(legacy, behaviours.props.meta), 1);
+        assert_eq!(behaviours.fluid_tags.water, 0b0000_0110);
     }
 }

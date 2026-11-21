@@ -503,6 +503,9 @@ pub struct FluidBlockBindings {
     air: BlockStateId,
     water: [BlockStateId; 16],
     lava: [BlockStateId; 16],
+    /// 1.7.10 has separate flowing-fluid blocks; a 26.3 registry does not.
+    flowing_water: Option<[BlockStateId; 16]>,
+    flowing_lava: Option<[BlockStateId; 16]>,
     /// Each mod fluid's block by level, by registration order; none when this registry lacks it.
     mods: Vec<Option<[BlockStateId; 16]>>,
 }
@@ -514,11 +517,26 @@ impl FluidBlockBindings {
                 .ok_or_else(|| invalid("missing liquid block"))?;
             let mut state = registry.state(default).unwrap().clone();
             let mut result = [default; 16];
-            for (level, id) in result.iter_mut().enumerate() {
-                state.properties.insert("level".into(), level.to_string());
-                *id = registry
-                    .id(&state)
-                    .ok_or_else(|| invalid("missing liquid block level"))?;
+            if state.properties.contains_key("meta") {
+                // 1.7.10: metadata 0 is the source, 1..=7 a flowing level and
+                // 8..=15 a falling one, which is this array's index. A client
+                // root also carries a constant `level` for the 26.3 fluid
+                // code, so metadata decides.
+                for (meta, id) in result.iter_mut().enumerate() {
+                    state.properties.insert("meta".into(), meta.to_string());
+                    *id = registry
+                        .id(&state)
+                        .ok_or_else(|| invalid("missing liquid block level"))?;
+                }
+            } else if state.properties.contains_key("level") {
+                for (level, id) in result.iter_mut().enumerate() {
+                    state.properties.insert("level".into(), level.to_string());
+                    *id = registry
+                        .id(&state)
+                        .ok_or_else(|| invalid("missing liquid block level"))?;
+                }
+            } else {
+                return Err(invalid("missing liquid block level"));
             }
             Ok(result)
         };
@@ -528,6 +546,8 @@ impl FluidBlockBindings {
                 .ok_or_else(|| invalid("missing air block"))?,
             water: levels("minecraft:water")?,
             lava: levels("minecraft:lava")?,
+            flowing_water: levels("minecraft:flowing_water").ok(),
+            flowing_lava: levels("minecraft:flowing_lava").ok(),
             mods: mod_fluids()
                 .into_iter()
                 .map(|(_, fluid)| levels(&fluid.id).ok())
@@ -551,10 +571,11 @@ impl FluidBlockBindings {
                 .flatten()
                 .map_or(self.air, |levels| levels[level]);
         }
-        if state.kind.same_family(FluidKind::Water) {
-            self.water[level]
-        } else {
-            self.lava[level]
+        match state.kind {
+            FluidKind::FlowingWater => self.flowing_water.unwrap_or(self.water)[level],
+            FluidKind::FlowingLava => self.flowing_lava.unwrap_or(self.lava)[level],
+            FluidKind::Lava => self.lava[level],
+            _ => self.water[level],
         }
     }
 }
