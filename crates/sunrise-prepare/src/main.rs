@@ -26,6 +26,7 @@ Usage: sunrise-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
        sunrise-prepare fonts [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
        sunrise-prepare packs [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
        sunrise-prepare languages [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
+       sunrise-prepare assets-1.7.10 [--client-jar PATH] [--root PATH] [--output PATH]
        sunrise-prepare needs [--root PATH] [--json]
        sunrise-prepare missing-extras [--root PATH] [--output PATH] [--json]
        sunrise-prepare extras [--only KIND,...] [--minecraft-dir PATH]... [--assets-dir PATH] [--root PATH] [--output PATH] [--json]
@@ -68,6 +69,13 @@ compile-exporters builds and validates a release bundle from the already importe
 The resources go to <root>/.local/sunrise-client/<version>, or --output; pass that to
 sunrise-client --resources. Exit codes: 0 done, 1 failed (or --check found gaps), 2 a refused
 command line (docs/api/launch.md).
+
+sunrise-prepare assets-1.7.10 extracts the 1.7.10 client JAR's block and item textures, GUI and title
+textures, en_US language, fonts and colormaps into the 1.7.10 resource folder, and writes
+assets-1.7.10.json saying what came from where (with hashes) and which blocks register no sprite.
+It reads .local/minecraft/1.7.10/named/client.jar and writes .local/sunrise-client/1.7.10 unless
+--client-jar or --output names others. 1.7.10 sounds are not in the JAR; the audio step imports
+them from the launcher's asset store.
 
 sunrise-prepare panorama repairs the classic menu background in existing resources without Java.
 sunrise-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -130,6 +138,7 @@ fn main() -> ExitCode {
                     | "fonts"
                     | "packs"
                     | "languages"
+                    | "assets-1.7.10"
                     | "compile-exporters"
                     | "needs"
                     | "missing-extras"
@@ -307,6 +316,12 @@ fn main() -> ExitCode {
                 &log,
             )
         }
+        Some("assets-1.7.10") => sunrise_prepare::assets_1_7_10::prepare(
+            &options.root,
+            options.output.as_deref(),
+            options.inputs.client_jar.as_deref(),
+            &log,
+        ),
         _ => sunrise_prepare::prepare_with_progress(&options, &log, &progress).and_then(
             |resources| match complete {
                 true => complete_resources(&options, resources, &log),

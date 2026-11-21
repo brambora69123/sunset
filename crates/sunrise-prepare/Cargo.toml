@@ -9,6 +9,9 @@ description = "Prepares Sunrise's resources from the player's own Minecraft: imp
 [dependencies]
 # Writes the game's cache of prepared data (`data-file`), in the game's own format.
 sunrise-core = { path = "../sunrise-core" }
+# The 1.7.10 block registry and its id → sprite mapping (`Block.getSprite`), ported there.
+sunset-1-7-assets = { path = "../v17/assets" }
+sunset-1-7-blocks = { path = "../v17/blocks" }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 sha1 = "0.10"
 sha2 = "0.10"

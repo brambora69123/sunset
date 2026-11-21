@@ -11,6 +11,7 @@
 //! run, keyed by the sha256 of their inputs and outputs recorded in the manifest, as before.
 
 pub mod artifacts;
+pub mod assets_1_7_10;
 mod check;
 pub mod exporters;
 pub mod extras;
