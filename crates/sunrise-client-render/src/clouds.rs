@@ -164,6 +164,9 @@ struct MeshKey {
     // faces are drawn. Only read while the camera is inside the layer.
     sub_x: i32,
     sub_z: i32,
+    /// The 1.7.10 cloud texture's load (0 for a modern root, which has none): the era mesh is
+    /// rebuilt when a reload replaces the texture.
+    era: u64,
 }
 
 #[repr(C)]
@@ -219,6 +222,7 @@ impl Input<'_> {
             bottom: bottom + 4.0 >= 0.0,
             sub_x,
             sub_z,
+            era: 0,
         };
         let colors = [1.0, 0.7, 0.8, 0.9].map(|shade| {
             let [r, g, b, a] = self.color;
@@ -237,6 +241,344 @@ impl Input<'_> {
                 colors,
             },
         )
+    }
+}
+
+/// The 1.7.10 cloud texture, packed into the GUI atlas by [`crate::hud::HudAtlas`] when the
+/// content root is the era's: its atlas rect and a load generation the cloud mesh keys on.
+static ERA_TEXTURE: std::sync::Mutex<Option<(u64, [f32; 4])>> = std::sync::Mutex::new(None);
+static ERA_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Give (or take away) the 1.7.10 cloud texture: its atlas rect `(u0, v0, u1, v1)`. The HUD
+/// atlas calls this when it builds an era root's sprites, and with `None` for a 26.3 root.
+pub fn set_era_texture(uv: Option<[f32; 4]>) {
+    let generation = ERA_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    *ERA_TEXTURE.lock().unwrap_or_else(|e| e.into_inner()) = uv.map(|uv| (generation, uv));
+}
+
+fn era_texture() -> Option<(u64, [f32; 4])> {
+    *ERA_TEXTURE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Textures per side of the era's `clouds.png`.
+const ERA_CLOUD_TEXELS: f32 = 256.0;
+/// `renderFancyClouds`'s group: 8 cloud cells, each 12 blocks.
+const ERA_GROUP: f32 = 96.0;
+
+/// The 1.7.10 cloud uniform: `renderFancyClouds`'s fractional shift of the patch inside the
+/// camera's cell (`-var22 * 12`, `-var23 * 12`), the layer's bottom (`var12`), and the four
+/// face shades times the cloud colour (alpha 0.8).
+fn era_state(input: &Input<'_>, generation: u64) -> (MeshKey, Uniform) {
+    let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
+    let x = (input.camera.x + drift) / 12.0;
+    let z = input.camera.z / 12.0 + 0.33;
+    let cell_x = x.floor() as i64;
+    let cell_z = z.floor() as i64;
+    let bottom = (f64::from(input.height) - input.camera.y + 0.33) as f32;
+    let colors = [1.0, 0.7, 0.8, 0.9].map(|shade| {
+        let [r, g, b, a] = input.color;
+        [r * shade, g * shade, b * shade, a]
+            .map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8 as f32 / 255.0)
+    });
+    let offset = if input.fast {
+        [0.0, bottom, 0.0, 0.0]
+    } else {
+        [
+            -((x - cell_x as f64) * 12.0) as f32,
+            bottom,
+            -((z - cell_z as f64) * 12.0) as f32,
+            0.0,
+        ]
+    };
+    let key = MeshKey {
+        cell_x,
+        cell_z,
+        radius: 0,
+        fast: input.fast,
+        top: bottom <= 5.0,
+        bottom: bottom > -5.0,
+        sub_x: 0,
+        sub_z: 0,
+        era: generation,
+    };
+    (key, Uniform { offset, colors })
+}
+
+/// A texel coordinate in the era's cloud texture, mapped into the atlas rect `uv`.
+fn era_uv(uv: [f32; 4], u: f32, v: f32) -> [f32; 2] {
+    [
+        uv[0] + u / ERA_CLOUD_TEXELS * (uv[2] - uv[0]),
+        uv[1] + v / ERA_CLOUD_TEXELS * (uv[3] - uv[1]),
+    ]
+}
+
+fn push_quad_uvs(
+    vertices: &mut Vec<crate::mesher::Vertex>,
+    p: [[f32; 3]; 4],
+    shade: u32,
+    normal: [i8; 4],
+    uvs: [[f32; 2]; 4],
+) {
+    for (pos, uv) in p.into_iter().zip(uvs) {
+        vertices.push(crate::mesher::Vertex {
+            normal,
+            pos,
+            uv,
+            layer: 4,
+            color: u32::MAX,
+            light: shade,
+            glint_uv: [0.0, 0.0],
+        });
+    }
+}
+
+/// `renderFancyClouds`: eight 96-block groups around the camera, each a 96x96x4 cell drawn as
+/// its top and bottom and eight 12-block slices through each horizontal axis. The slices are
+/// the era's own look: each carries one texel column of the cell's 8x8 texture.
+fn era_fancy(
+    vertices: &mut Vec<crate::mesher::Vertex>,
+    input: &Input<'_>,
+    uv: [f32; 4],
+    bottom: f32,
+) {
+    const EPS: f32 = 9.765_625e-4;
+    let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
+    let x = (input.camera.x + drift) / 12.0;
+    let z = input.camera.z / 12.0 + 0.33;
+    let cell_x = x.floor() as i64;
+    let cell_z = z.floor() as i64;
+    let top = bottom + 4.0 - EPS;
+    // The cell's texel block in the 256x256 sheet, wrapped the way the sheet repeats.
+    let texel = |cell: i64, offset: i64| (cell + offset).rem_euclid(256) as f32;
+    for dz in -3..=4 {
+        for dx in -3..=4 {
+            let x0 = dx as f32 * ERA_GROUP;
+            let z0 = dz as f32 * ERA_GROUP;
+            let (x1, z1) = (x0 + ERA_GROUP, z0 + ERA_GROUP);
+            let tu = texel(cell_x, dx * 8);
+            let tv = texel(cell_z, dz * 8);
+            // Top: `if (var12 <= var5 + 1.0F)`; bottom: `if (var12 > -var5 - 1.0F)`.
+            if bottom <= 5.0 {
+                push_quad_uvs(
+                    vertices,
+                    [[x0, top, z1], [x1, top, z1], [x1, top, z0], [x0, top, z0]],
+                    0,
+                    [0, 127, 0, 0],
+                    [
+                        era_uv(uv, tu, tv + 8.0),
+                        era_uv(uv, tu + 8.0, tv + 8.0),
+                        era_uv(uv, tu + 8.0, tv),
+                        era_uv(uv, tu, tv),
+                    ],
+                );
+            }
+            if bottom > -5.0 {
+                push_quad_uvs(
+                    vertices,
+                    [
+                        [x0, bottom, z0],
+                        [x1, bottom, z0],
+                        [x1, bottom, z1],
+                        [x0, bottom, z1],
+                    ],
+                    1,
+                    [0, -127, 0, 0],
+                    [
+                        era_uv(uv, tu, tv),
+                        era_uv(uv, tu + 8.0, tv),
+                        era_uv(uv, tu + 8.0, tv + 8.0),
+                        era_uv(uv, tu, tv + 8.0),
+                    ],
+                );
+            }
+            // West and east: eight slices at every 12-block boundary, each sampling one texel
+            // column and 24 rows over the 4-block height.
+            for k in 0..8 {
+                let u = tu + k as f32 + 0.5;
+                if dx > -1 {
+                    let x = x0 + k as f32 * 12.0;
+                    for (v0, v1, y0, y1) in era_side_rows(tv) {
+                        push_quad_uvs(
+                            vertices,
+                            [
+                                [x, bottom + y0, z1],
+                                [x, bottom + y1, z1],
+                                [x, bottom + y1, z0],
+                                [x, bottom + y0, z0],
+                            ],
+                            3,
+                            [-127, 0, 0, 0],
+                            [
+                                era_uv(uv, u, v0),
+                                era_uv(uv, u, v1),
+                                era_uv(uv, u, v1),
+                                era_uv(uv, u, v0),
+                            ],
+                        );
+                    }
+                }
+                if dx <= 1 {
+                    let x = x1 - EPS - k as f32 * 12.0;
+                    for (v0, v1, y0, y1) in era_side_rows(tv) {
+                        push_quad_uvs(
+                            vertices,
+                            [
+                                [x, bottom + y0, z0],
+                                [x, bottom + y1, z0],
+                                [x, bottom + y1, z1],
+                                [x, bottom + y0, z1],
+                            ],
+                            3,
+                            [127, 0, 0, 0],
+                            [
+                                era_uv(uv, u, v0),
+                                era_uv(uv, u, v1),
+                                era_uv(uv, u, v1),
+                                era_uv(uv, u, v0),
+                            ],
+                        );
+                    }
+                }
+                let v = tv + k as f32 + 0.5;
+                if dz > -1 {
+                    let z = z0 + k as f32 * 12.0;
+                    push_quad_uvs(
+                        vertices,
+                        [[x0, top, z], [x1, top, z], [x1, bottom, z], [x0, bottom, z]],
+                        2,
+                        [0, 0, -127, 0],
+                        [
+                            era_uv(uv, tu, v),
+                            era_uv(uv, tu + 8.0, v),
+                            era_uv(uv, tu + 8.0, v),
+                            era_uv(uv, tu, v),
+                        ],
+                    );
+                }
+                if dz <= 1 {
+                    let z = z1 - EPS - k as f32 * 12.0;
+                    push_quad_uvs(
+                        vertices,
+                        [[x0, bottom, z], [x1, bottom, z], [x1, top, z], [x0, top, z]],
+                        2,
+                        [0, 0, 127, 0],
+                        [
+                            era_uv(uv, tu, v),
+                            era_uv(uv, tu + 8.0, v),
+                            era_uv(uv, tu + 8.0, v),
+                            era_uv(uv, tu, v),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `renderFancyClouds`'s side v coordinates: `[texel, texel + 24]` over the 4-block height,
+/// split where the sheet repeats so no quad leaves the atlas rect.
+fn era_side_rows(base: f32) -> Vec<(f32, f32, f32, f32)> {
+    let mut out = Vec::new();
+    let mut left = 24.0f32;
+    let mut texel = base;
+    let mut done = 0.0f32;
+    while left > 0.0 {
+        let take = left.min(256.0 - texel);
+        let (y0, y1) = (done / 24.0 * 4.0, (done + take) / 24.0 * 4.0);
+        out.push((texel, texel + take, y0, y1));
+        done += take;
+        left -= take;
+        texel = (texel + take).rem_euclid(256.0);
+    }
+    out
+}
+
+/// `renderClouds`'s fast path: one 512x512 plane at the cloud height, textured at 2048 blocks
+/// per repeat and drifting with the camera (`var20`, `var21`).
+fn era_fast(
+    vertices: &mut Vec<crate::mesher::Vertex>,
+    input: &Input<'_>,
+    uv: [f32; 4],
+    bottom: f32,
+) {
+    let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
+    let mut x = input.camera.x + drift;
+    let mut z = input.camera.z;
+    x -= (x / 2048.0).floor() * 2048.0;
+    z -= (z / 2048.0).floor() * 2048.0;
+    for gz in 0..16 {
+        for gx in 0..16 {
+            let x0 = -256.0 + gx as f32 * 32.0;
+            let z0 = -256.0 + gz as f32 * 32.0;
+            let (x1, z1) = (x0 + 32.0, z0 + 32.0);
+            era_wrapped_plane(
+                vertices,
+                (
+                    [x0, x1],
+                    [(x0 + x as f32) / 2048.0, (x1 + x as f32) / 2048.0],
+                ),
+                (
+                    [z0, z1],
+                    [(z0 + z as f32) / 2048.0, (z1 + z as f32) / 2048.0],
+                ),
+                bottom,
+                uv,
+            );
+        }
+    }
+}
+
+/// One fast-path cell, split where its texture coordinates cross a repeat so every quad maps
+/// inside the atlas rect.
+fn era_wrapped_plane(
+    vertices: &mut Vec<crate::mesher::Vertex>,
+    (x, u): ([f32; 2], [f32; 2]),
+    (z, v): ([f32; 2], [f32; 2]),
+    y: f32,
+    uv: [f32; 4],
+) {
+    // A world range and its linearly rising texture coordinates, cut at every integer
+    // coordinate so each piece stays inside one repeat: (from, to, first fraction, last).
+    fn splits([a, b]: [f32; 2], [ta, tb]: [f32; 2]) -> Vec<(f32, f32, f32, f32)> {
+        let slope = (tb - ta) / (b - a);
+        let mut cuts = Vec::new();
+        for k in (ta.floor() as i32 + 1)..=(tb.ceil() as i32 - 1) {
+            let at = a + (k as f32 - ta) / slope;
+            if at > a && at < b {
+                cuts.push((at, k as f32));
+            }
+        }
+        cuts.push((b, tb));
+        let mut out = Vec::new();
+        let (mut from, mut t_from) = (a, ta);
+        for (to, t_to) in cuts {
+            let lo = t_from - t_from.floor();
+            let hi = t_to - t_to.floor();
+            out.push((from, to, lo, if hi == 0.0 { 1.0 } else { hi }));
+            from = to;
+            t_from = t_to;
+        }
+        out
+    }
+    let us = splits(x, u);
+    let vs = splits(z, v);
+    for &(xa, xb, ua, ub) in &us {
+        for &(za, zb, va, vb) in &vs {
+            let texel = |t: f32| t * 256.0;
+            let uvs = [
+                era_uv(uv, texel(ua), texel(vb)),
+                era_uv(uv, texel(ub), texel(vb)),
+                era_uv(uv, texel(ub), texel(va)),
+                era_uv(uv, texel(ua), texel(va)),
+            ];
+            let p = [[xa, y, zb], [xb, y, zb], [xb, y, za], [xa, y, za]];
+            push_quad_uvs(vertices, p, 0, [0, 127, 0, 0], uvs);
+            let mut q = p;
+            let mut t = uvs;
+            q.reverse();
+            t.reverse();
+            push_quad_uvs(vertices, q, 0, [0, -127, 0, 0], t);
+        }
     }
 }
 
@@ -366,6 +708,23 @@ impl Mesh {
     /// Returns true only when vertices must be uploaded. Sub-cell motion and
     /// color changes update only the uniform, as in CloudRenderer.prepare.
     pub fn prepare(&mut self, input: &Input<'_>) -> (bool, Uniform) {
+        if let Some((generation, uv)) = era_texture() {
+            let (key, uniform) = era_state(input, generation);
+            // The fast plane's UVs follow the camera every frame; the fancy patch only when
+            // the camera crosses a 12-block cell or the texture reloads.
+            if !input.fast && self.key.as_ref() == Some(&key) {
+                return (false, uniform);
+            }
+            self.vertices.clear();
+            if input.fast {
+                era_fast(&mut self.vertices, input, uv, uniform.offset[1]);
+            } else {
+                era_fancy(&mut self.vertices, input, uv, uniform.offset[1]);
+            }
+            self.key = Some(key);
+            self.cached_radius = None;
+            return (true, uniform);
+        }
         let (key, uniform) = input.state(SNAP_CELLS);
         if self.key.as_ref() == Some(&key) {
             return (false, uniform);
@@ -865,5 +1224,95 @@ mod tests {
     #[test]
     fn nearby_cells_keep_inward_faces_for_camera_inside_clouds() {
         assert_eq!(face_mask(0, 0, 0.0, [false; 4]), 3 | (63 << 6));
+    }
+
+    fn era_input<'a>(texture: &'a (u32, u32, Vec<bool>)) -> Input<'a> {
+        Input {
+            texture,
+            uv: [0.5; 2],
+            camera: glam::DVec3::new(0.0, 70.0, 0.0),
+            time: 0,
+            partial_tick: 0.0,
+            range: 128,
+            fast: false,
+            color: [1.0, 1.0, 1.0, 0.8],
+            height: 128.0,
+        }
+    }
+
+    /// `renderFancyClouds`: the layer's bottom is `getCloudHeight() - cameraY + 0.33` (128 -
+    /// 70 + 0.33) and its top 4 blocks above, one group being 8 cells of 12 blocks.
+    #[test]
+    fn era_fancy_clouds_are_the_96_block_groups_at_y_128() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let input = era_input(&texture);
+        let mut vertices = Vec::new();
+        era_fancy(&mut vertices, &input, [0.0, 0.0, 1.0, 1.0], 58.33);
+        assert!(!vertices.is_empty());
+        let ys = vertices.iter().map(|v| v.pos[1]);
+        let (min, max) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
+        assert!((min - 58.33).abs() < 1e-4);
+        // The slices reach the layer's full 4 blocks; the top face sits 1/1024 below.
+        assert!((max - (58.33 + 4.0)).abs() < 1e-4);
+        // Eight groups each way: from -3*96 to (4+1)*96, 768 blocks across.
+        let xs = vertices
+            .iter()
+            .map(|v| v.pos[0])
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert_eq!(xs, (-288.0, 480.0));
+        // Every vertex samples inside the atlas rect.
+        assert!(
+            vertices
+                .iter()
+                .all(|v| { (0.0..=1.0).contains(&v.uv[0]) && (0.0..=1.0).contains(&v.uv[1]) })
+        );
+    }
+
+    /// The fast path is one 512x512 plane at the same height, sixteen 32-block cells each way.
+    #[test]
+    fn era_fast_clouds_are_the_512_block_plane() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let mut input = era_input(&texture);
+        input.fast = true;
+        let mut vertices = Vec::new();
+        era_fast(&mut vertices, &input, [0.0, 0.0, 1.0, 1.0], 58.33);
+        assert_eq!(vertices.len(), 16 * 16 * 4 * 2);
+        let xs = vertices
+            .iter()
+            .map(|v| v.pos[0])
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert_eq!(xs, (-256.0, 256.0));
+        assert!(vertices.iter().all(|v| v.pos[1] == 58.33));
+        assert!(
+            vertices
+                .iter()
+                .all(|v| { (0.0..=1.0).contains(&v.uv[0]) && (0.0..=1.0).contains(&v.uv[1]) })
+        );
+    }
+
+    /// `renderFancyClouds`' face shades and alpha: top 1, bottom 0.7, north/south 0.8,
+    /// west/east 0.9, all at 0.8 alpha, quantized through the era's ARGB int.
+    #[test]
+    fn era_cloud_colours_are_the_eras_four_shades_at_alpha_08() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let input = era_input(&texture);
+        let (_, uniform) = era_state(&input, 1);
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8 as f32 / 255.0;
+        assert_eq!(uniform.colors[0], [1.0, 1.0, 1.0, q(0.8)]);
+        assert_eq!(uniform.colors[1][0], q(0.7));
+        assert_eq!(uniform.colors[2][0], q(0.8));
+        assert_eq!(uniform.colors[3][0], q(0.9));
+        assert_eq!(uniform.colors[3][3], 204.0 / 255.0);
+    }
+
+    /// The side slices' v range wraps through the sheet in whole 8-texel rows.
+    #[test]
+    fn era_side_rows_split_where_the_sheet_wraps() {
+        assert_eq!(era_side_rows(0.0), vec![(0.0, 24.0, 0.0, 4.0)]);
+        let wrapped = era_side_rows(248.0);
+        assert_eq!(
+            wrapped,
+            vec![(248.0, 256.0, 0.0, 4.0 / 3.0), (0.0, 16.0, 4.0 / 3.0, 4.0)]
+        );
     }
 }

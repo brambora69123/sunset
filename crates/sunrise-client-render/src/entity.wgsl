@@ -233,6 +233,14 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
+// clouds.fsh's fade: from 0 to the cloud fog end normally; the 1.7.10 era negates that end
+// and fades from three quarters of it, as its `setupFog` fogs clouds from 0.75 * render
+// distance (fog.rs's era branch).
+fn cloud_fade(d: f32) -> f32 {
+    let end = abs(globals.fog_ends.y);
+    let start = select(0.0, end * 0.75, globals.fog_ends.y < 0.0);
+    return 1.0 - linear_fog(d, start, end);
+}
 // TextureTransform.setupGlintTexturing(0.16), ARMOR_ENTITY_GLINT_TEXTURING.
 // globals.time.w is (Util.getMillis() * glintSpeed * 8) modulo 330000, the
 // common period of both offsets.
@@ -329,7 +337,7 @@ fn entity_color(in: Out, front: bool) -> vec4<f32> {
         color = vec4(c, 1.0);
     } else if in.overlay == 4u {
         // clouds.fsh: alpha fades out towards the cloud fog end.
-        return vec4(color.rgb, color.a * (1.0 - linear_fog(in.fog_distance.x, 0.0, globals.fog_ends.y)));
+        return vec4(color.rgb, color.a * cloud_fade(in.fog_distance.x));
     }
     if color.a < 0.1 || (in.cull != 0u && !front) { discard; }
     // entity.fsh calculateFinalColor: the overlay (hurt red, TNT white) over the
@@ -421,7 +429,7 @@ fn hdr_mark(tier: u32, y: f32) -> f32 {
 // Clouds, drawn again after them with only alpha written: their blending leaves the sun's and
 // moon's marks behind them partly showing. Unmarked, they lift nothing there.
 @fragment fn fs_hdr_cloud_mark(in: Out) -> @location(0) vec4<f32> {
-    let a = in.color.a * (1.0 - linear_fog(in.fog_distance.x, 0.0, globals.fog_ends.y));
+    let a = in.color.a * cloud_fade(in.fog_distance.x);
     if a < 0.1 { discard; }
     return vec4(0.0, 0.0, 0.0, 1.0);
 }

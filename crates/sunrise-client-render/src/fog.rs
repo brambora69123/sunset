@@ -234,6 +234,9 @@ pub struct FogInputs<'a> {
 
 /// `FogRenderer.setupFog` + `computeFogColor`.
 pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> FogData {
+    if input.sky.era {
+        return setup_fog_era(input);
+    }
     let rd = input.render_distance_chunks as f32 * 16.0;
     let sky = input.sky;
     let eye_in_water = input.fog_type == FogType::Water;
@@ -429,6 +432,176 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     }
     fog
 }
+
+/// `GameRenderer.setupClearColor` and `setupFog` for a 1.7.10 content root.
+///
+/// The era has no fog attributes: its distances come from the render distance (`viewDistance *
+/// 16`) and its colour from the dimension's fog colour mixed toward the biome's sky colour,
+/// with the sunrise tint, rain and thunder, the fluid the eye is in, the lightmap's fog
+/// brightness and the void.
+fn setup_fog_era(input: &FogInputs) -> FogData {
+    use crate::sky_1_7_10 as era;
+    let sky = input.sky;
+    let view = input.render_distance_chunks.clamp(0, 16) as f32;
+    let render_distance = view * 16.0;
+    let natural = input.skybox;
+    // `setupClearColor`'s mix toward the sky colour: 1 - (0.25 + 0.75 * viewDistance / 16) ^ 0.25.
+    let sky_mix = 1.0 - (0.25 + 0.75 * view / 16.0).powf(0.25);
+    let mut color = sky.fog_color;
+    if natural {
+        // The sunrise/sunset tint while the view faces the sun and the view distance reaches 4.
+        if input.render_distance_chunks >= 4 {
+            let sun_x = if sky.sun_angle.to_radians().sin() > 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            let looking = input.forward[0] * sun_x;
+            let alpha = sky.sunrise_color[3];
+            if looking > 0.0 && alpha > 0.0 {
+                let t = looking * alpha;
+                color = std::array::from_fn(|i| color[i] + (sky.sky_color[i] - color[i]) * t);
+            }
+        }
+        color = std::array::from_fn(|i| color[i] + (sky.sky_color[i] - color[i]) * sky_mix);
+    }
+    if input.rain > 0.0 {
+        let (m, b) = (1.0 - input.rain * 0.5, 1.0 - input.rain * 0.4);
+        color = [color[0] * m, color[1] * m, color[2] * b];
+    }
+    if input.thunder > 0.0 {
+        let m = 1.0 - input.thunder * 0.5;
+        color = color.map(|c| c * m);
+    }
+    // `Camera.isInLiquid`: the era's own fluid colours, before the lightmap's fog brightness.
+    match input.fog_type {
+        FogType::Water => color = [0.02, 0.02, 0.2],
+        FogType::Lava => color = [0.6, 0.1, 0.0],
+        _ => {}
+    }
+    // `fogBrightness`: the camera block's light, eased toward full by the view distance.
+    color = color.map(|c| c * era::fog_brightness(sky.sky_light_level, view as i32));
+    // `var14 = cameraY * getFogSize()`, squared into the colour below y 28 (and lower still
+    // with sky light); blindness closes it from the top.
+    let fog_size = if input.flat { 1.0 } else { 0.03125 };
+    let mut depth = input.camera_y * fog_size;
+    if let Some((duration, infinite)) = input.blindness {
+        depth = if !infinite && duration < 20 {
+            depth * (1.0 - duration.max(0) as f64 / 20.0)
+        } else {
+            0.0
+        };
+    }
+    if depth < 1.0 {
+        let d = depth.max(0.0) as f32;
+        color = color.map(|c| c * d * d);
+    }
+    // `skyDarkness` (a boss bar that dims the world) and night vision, as `setupClearColor`.
+    if input.darken_world > 0.0 {
+        let t = input.darken_world;
+        color = [
+            color[0] + (color[0] * 0.7 - color[0]) * t,
+            color[1] + (color[1] * 0.6 - color[1]) * t,
+            color[2] + (color[2] * 0.6 - color[2]) * t,
+        ];
+    }
+    if input.night_vision > 0.0 && color.iter().any(|&c| c > 0.0) {
+        let scale = 1.0 / color[0].max(color[1]).max(color[2]);
+        let t = input.night_vision;
+        color = color.map(|c| c + (c * scale - c) * t);
+    }
+    // `setupFog`'s distances. The sky pass (`mode < 0`) starts at 0 and the terrain's at
+    // three quarters of the render distance; the void fog pulls the render distance in.
+    let void_end = if natural {
+        era_void_fog_end(
+            render_distance,
+            input.camera_y,
+            // A block's stored sky light, which the renderer does not receive: the effect is
+            // the underground one, where the camera's sky light is 0.
+            0.0,
+            true,
+        )
+    } else {
+        render_distance
+    };
+    let (mut start, mut end) = (void_end * 0.75, void_end);
+    let mut sky_end = void_end;
+    let mut cloud_end = void_end;
+    match input.fog_type {
+        FogType::Water => {
+            // `GL_EXP` at density 0.1 (0.05 with Water Breathing, 0.1 - 0.03 per Respiration
+            // level): the renderer's fog is linear, so the end where the era's curve reaches
+            // 0.95 stands in for the density (`3 / density` blocks).
+            start = 0.0;
+            end = 30.0;
+            sky_end = end;
+            cloud_end = end;
+        }
+        FogType::Lava => {
+            // `GL_EXP` at density 2.0.
+            start = 0.0;
+            end = 1.5;
+            sky_end = end;
+            cloud_end = end;
+        }
+        _ if input.blindness.is_some() => {
+            // Blinded: 5 blocks, closing in as the effect ends.
+            let (duration, infinite) = input.blindness.unwrap_or((0, true));
+            let distance = if infinite {
+                5.0
+            } else {
+                5.0 + (render_distance - 5.0) * (1.0 - duration.max(0) as f32 / 20.0)
+            };
+            start = distance * 0.25;
+            end = distance;
+            sky_end = distance * 0.8;
+            cloud_end = distance * 0.8;
+        }
+        // `isFogThick` (the Nether and the End): a tenth in, and half of the render distance
+        // capped at 192 blocks.
+        _ if !natural => {
+            start = render_distance * 0.05;
+            end = render_distance.min(192.0) * 0.5;
+            sky_end = end;
+            cloud_end = end;
+        }
+        _ => {}
+    }
+    FogData {
+        color: [color[0], color[1], color[2], 1.0],
+        environmental_start: start,
+        environmental_end: end,
+        // `apply_fog` takes the max of the spherical and cylindrical fades; both carry the
+        // era's one distance, so the spherical one decides.
+        render_distance_start: start,
+        render_distance_end: end,
+        sky_end,
+        // 1.7.10 fogs clouds from three quarters of the render distance to it; the cloud
+        // shader's one end starts at 0, so the era negates it and the shader reads the
+        // start as three quarters (`entity.wgsl`'s `cloud_fade`).
+        cloud_end: -cloud_end,
+    }
+}
+
+/// `GameRenderer.setupFog`'s void fog: the render distance pulled in when the camera block has
+/// no light, `100 * ((skyLight / 16) + ((cameraY + 4) / 32))^2` blocks (at least 5).
+///
+/// `sky_light` is the camera block's stored sky light 0..15. The era video setting this
+/// followed is not in 1.7.10 any more (the effect is always on); `on` is kept for the caller
+/// that wants to draw the era without it.
+pub fn era_void_fog_end(render_distance: f32, camera_y: f64, sky_light: f32, on: bool) -> f32 {
+    if !on {
+        return render_distance;
+    }
+    let mut f = sky_light / 16.0 + ((camera_y + 4.0) / 32.0) as f32;
+    if f >= 1.0 {
+        return render_distance;
+    }
+    f = f.max(0.0);
+    f *= f;
+    render_distance.min((100.0 * f).max(5.0))
+}
+
 /// Sunrise's Fog option turned off (`sunrise-graphics.txt` `fog:false`):
 /// no distance fog, in any dimension: the dimension's and biome's own fog
 /// (`visual/fog_start_distance`, `fog_end_distance`: the Nether's ends at 96
@@ -907,5 +1080,153 @@ mod tests {
         // Out of the water both lose it 10 a tick.
         spectator.tick(false, true);
         assert_eq!(spectator.water_vision_time, 590);
+    }
+
+    fn era_sky() -> Sky {
+        Sky {
+            era: true,
+            fog_color: [0.752_941_2, 0.847_058_83, 1.0],
+            sky_color: [121.0 / 255.0, 167.0 / 255.0, 1.0],
+            sky_light_level: 15.0,
+            cloud_height: 128.0,
+            ..Sky::default()
+        }
+    }
+
+    /// `GameRenderer.setupFog`: terrain fog runs from three quarters of the render distance
+    /// to it, and the sky pass from 0. 1.7.10's `viewDistance` is in chunks, 2..16.
+    #[test]
+    fn era_fog_spans_the_render_distance() {
+        for chunks in 2..=16 {
+            let sky = era_sky();
+            let mut input = inputs(&sky);
+            input.render_distance_chunks = chunks;
+            let fog = setup_fog(&FogTables::default(), &FogState::default(), &input);
+            let d = (chunks * 16) as f32;
+            assert_eq!(fog.environmental_start, d * 0.75, "{chunks} chunks");
+            assert_eq!(fog.environmental_end, d, "{chunks} chunks");
+            assert_eq!(fog.render_distance_start, d * 0.75, "{chunks} chunks");
+            assert_eq!(fog.render_distance_end, d, "{chunks} chunks");
+            assert_eq!(fog.sky_end, d, "{chunks} chunks");
+            assert_eq!(fog.cloud_end, -d, "{chunks} chunks");
+        }
+    }
+
+    /// `setupClearColor`'s fog colour at noon: the dimension's fog colour mixed 1 - (0.25 +
+    /// 0.75 * viewDistance / 16)^0.25 of the way toward the biome's sky colour, at full
+    /// lightmap brightness.
+    #[test]
+    fn era_fog_colour_mixes_the_dimension_toward_the_biome() {
+        let sky = era_sky();
+        let mut input = inputs(&sky);
+        input.forward = [0.0, 0.0, 1.0];
+        input.render_distance_chunks = 12;
+        let fog = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        let mix = 1.0 - (0.25f32 + 0.75 * 12.0 / 16.0).powf(0.25);
+        let expected = [
+            0.752_941_2 + (121.0 / 255.0 - 0.752_941_2) * mix,
+            0.847_058_83 + (167.0 / 255.0 - 0.847_058_83) * mix,
+            1.0 + (1.0 - 1.0) * mix,
+        ];
+        for (got, want) in fog.color[..3].iter().zip(expected) {
+            assert!((got - want).abs() < 1e-6, "{got} against {want}");
+        }
+    }
+
+    /// `Camera.isInLiquid`: the era hardcodes water and lava, then dims them by the lightmap's
+    /// fog brightness (1 at noon).
+    #[test]
+    fn era_fluid_fog_has_the_eras_colours_and_distances() {
+        let sky = era_sky();
+        let mut input = inputs(&sky);
+        input.fog_type = FogType::Water;
+        let water = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        assert_eq!(&water.color[..3], &[0.02, 0.02, 0.2]);
+        assert_eq!(
+            (water.environmental_start, water.environmental_end),
+            (0.0, 30.0)
+        );
+        assert_eq!(water.sky_end, 30.0);
+        assert_eq!(water.cloud_end, -30.0);
+        input.fog_type = FogType::Lava;
+        let lava = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        assert_eq!(&lava.color[..3], &[0.6, 0.1, 0.0]);
+        assert_eq!(
+            (lava.environmental_start, lava.environmental_end),
+            (0.0, 1.5)
+        );
+    }
+
+    /// `setupFog`'s void fog: `100 * ((skyLight / 16) + ((y + 4) / 32))^2`, at least 5, and
+    /// never farther than the render distance.
+    #[test]
+    fn era_void_fog_closes_in_with_depth() {
+        // 192 blocks (12 chunks), a block with no sky light.
+        assert_eq!(era_void_fog_end(192.0, 28.0, 0.0, true), 192.0);
+        assert!((era_void_fog_end(192.0, 20.0, 0.0, true) - 56.25).abs() < 1e-4);
+        assert!((era_void_fog_end(192.0, 0.0, 0.0, true) - 5.0).abs() < 1e-4);
+        assert_eq!(era_void_fog_end(192.0, -64.0, 0.0, true), 5.0);
+        // At y 24 the curve is 100 * (28/32)^2 = 76.5625, past a 32-block render distance.
+        assert_eq!(era_void_fog_end(32.0, 24.0, 0.0, true), 32.0);
+        assert!((era_void_fog_end(192.0, 24.0, 0.0, true) - 76.5625).abs() < 1e-4);
+        // A block with sky light reaches the curve only underground.
+        assert_eq!(era_void_fog_end(192.0, 20.0, 15.0, true), 192.0);
+        assert!((era_void_fog_end(192.0, -10.0, 15.0, true) - 56.25).abs() < 1e-4);
+        // The toggle leaves the render distance alone.
+        assert_eq!(era_void_fog_end(192.0, 0.0, 0.0, false), 192.0);
+        // The curve's distances in the fog: 20 -> 56.25 blocks, start 3/4 of it.
+        let sky = era_sky();
+        let mut input = inputs(&sky);
+        input.camera_y = 20.0;
+        let fog = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        assert!((fog.environmental_end - 56.25).abs() < 1e-4);
+        assert!((fog.environmental_start - 42.1875).abs() < 1e-4);
+    }
+
+    /// `isFogThick` (the Nether and the End): fog starts at a twentieth of the render
+    /// distance and ends at half of it, capped at 192 blocks.
+    #[test]
+    fn era_thick_dimensions_pull_the_fog_in() {
+        let mut sky = era_sky();
+        sky.fog_color = [0.2, 0.03, 0.03];
+        let mut input = inputs(&sky);
+        input.skybox = false;
+        input.render_distance_chunks = 12;
+        let fog = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        assert!((fog.environmental_start - 192.0 * 0.05).abs() < 1e-6);
+        assert!((fog.environmental_end - 192.0 * 0.5).abs() < 1e-6);
+        assert_eq!(&fog.color[..3], &[0.2, 0.03, 0.03]);
+        // 16 chunks: the cap holds the end at 96, which is half of 192.
+        input.render_distance_chunks = 16;
+        let capped = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        assert!((capped.environmental_end - 96.0).abs() < 1e-6);
+    }
+
+    /// `setupClearColor` below y 28: the fog colour is multiplied by
+    /// `(cameraY * 0.03125)^2`, so the void fades to black.
+    #[test]
+    fn era_void_darkens_the_fog_colour() {
+        let sky = era_sky();
+        let mut input = inputs(&sky);
+        let mix = 1.0 - (0.25f32 + 0.75 * 12.0 / 16.0).powf(0.25);
+        let mixed = [
+            0.752_941_2 + (121.0 / 255.0 - 0.752_941_2) * mix,
+            0.847_058_83 + (167.0 / 255.0 - 0.847_058_83) * mix,
+            1.0,
+        ];
+        input.camera_y = 16.0;
+        let fog = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        let depth = (16.0 * 0.03125f64) as f32;
+        for (got, want) in fog.color[..3].iter().zip(mixed) {
+            assert!(
+                (got - want * depth * depth).abs() < 1e-6,
+                "{got} against {want}"
+            );
+        }
+        input.camera_y = 32.0;
+        let high = setup_fog(&FogTables::default(), &FogState::default(), &input);
+        for (got, want) in high.color[..3].iter().zip(mixed) {
+            assert!((got - want).abs() < 1e-6, "{got} against {want}");
+        }
     }
 }

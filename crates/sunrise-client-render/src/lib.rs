@@ -148,6 +148,7 @@ pub mod shader_pack_list;
 pub mod shader_ui;
 pub mod signs;
 pub mod skins;
+pub mod sky_1_7_10;
 pub mod social;
 pub mod sound_engine;
 pub mod sound_events;
