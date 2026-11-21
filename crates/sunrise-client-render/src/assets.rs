@@ -110,6 +110,10 @@ pub struct RenderAssets {
     pub mod_animations: crate::mod_animations::Animations,
     /// The mods' registered render pipelines as this load built them.
     pub mod_pipelines: crate::mod_pipelines::Pipelines,
+    /// The 1.7.10 render data (block rows and colormaps) when this load is the
+    /// era's content root; `None` for 26.3. The mesher's era path is chosen by
+    /// it, and no state of a 26.3 registry carries a `meta` property.
+    pub era: Option<crate::mesher::sunset17::EraRenderAssets>,
     /// Counts up on every successful resource load, including model-only changes.
     /// Only publishing this store invalidates the previous store's model handles and sprites.
     pub generation: u64,
@@ -362,6 +366,13 @@ impl RenderAssets {
         draws: bool,
         parsed: Option<crate::model_library::ParsedModels>,
     ) -> Result<Self> {
+        // The era's own resources: 1.7.10 registers its textures one file at a
+        // time and has no block models, so the 26.3 loader cannot read the
+        // tree. The shape of the root decides, the same marker the font and
+        // HUD loaders use.
+        if crate::sunset17_assets::is_source(root.source()) {
+            return Self::load_1_7_10(root);
+        }
         let registry = assets.registry;
         let mut sprites = if draws {
             crate::sprites::Sprites::with_disk_cache(root)
@@ -535,6 +546,7 @@ impl RenderAssets {
             // A required pipeline that doesn't build fails the load: nothing of it is published.
             mod_pipelines: crate::mod_pipelines::Pipelines::load(root.source(), generation)?,
             generation,
+            era: None,
         })
     }
 
@@ -555,6 +567,8 @@ impl RenderAssets {
         sprites.pixels.shrink_to_fit();
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let models = crate::models::PreparedModels::default();
+        let era_render =
+            crate::mesher::sunset17::EraRenderAssets::load(&era, &sprites.layers, root.source())?;
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
@@ -578,6 +592,7 @@ impl RenderAssets {
             mod_animations: Default::default(),
             mod_pipelines: Default::default(),
             generation,
+            era: Some(era_render),
         })
     }
 }

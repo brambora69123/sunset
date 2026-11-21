@@ -18,6 +18,7 @@ mod sides;
 #[cfg(test)]
 #[path = "mesher/source_tests.rs"]
 mod source_tests;
+pub mod sunset17;
 use crate::connected::{Pick, TileLayer};
 use crate::{
     assets::{Assets, RenderAssets},
@@ -800,6 +801,9 @@ pub struct MeshTables {
     mod_tints: mod_tint::ModTints,
     /// The mods' section geometry renderers (`add_section_geometry`), in registration order.
     section_geometry: Arc<[mod_geometry::Renderer]>,
+    /// The 1.7.10 per-state table when the content root is the era's: the
+    /// mesher then runs the era's `RenderBlocks` instead of the 26.3 models.
+    era: Option<Arc<sunset17::StateTable17>>,
     /// Resource packs' Polytone block and fluid colormaps (#11486), and the water's.
     colormaps: Vec<Arc<crate::environment::Colormap>>,
     water_colormap: Option<u16>,
@@ -1102,6 +1106,14 @@ impl MeshTables {
             water_colormap: None,
             mod_tints: mod_tint::ModTints::default(),
             section_geometry: mod_geometry::registered(),
+            era: if sunset17::is_era_registry(assets) {
+                let emission: Vec<u8> = facts.states.iter().map(|state| state.emission).collect();
+                Some(Arc::new(sunset17::StateTable17::era(
+                    assets, render, &emission,
+                )?))
+            } else {
+                None
+            },
         };
         if let Some(registered) = mod_tint::registered() {
             tables.apply_tint_layers(assets.registry, registered, mod_tint_values)?;
@@ -2195,6 +2207,35 @@ impl Mesher<'_> {
         let opaque = &scratch.solid_rows;
         let (open, hidden) = row_masks(opaque);
         out.visibility = visibility_rows(&open);
+        if let Some(era) = &self.tables.era {
+            // 1.7.10: the era's own RenderBlocks over (id, metadata).
+            let tints = Tints::new(
+                region,
+                self.biomes,
+                self.zoom,
+                self.blend_radius,
+                [center.x, center.z, base_y],
+            );
+            let options = sunset17::render::RenderOptions {
+                ao: i32::from(self.smooth_lighting),
+                fancy_graphics: self.cutout_leaves,
+                anaglyph: false,
+            };
+            sunset17::mesh(
+                sunset17::MeshInput {
+                    pad,
+                    table: era,
+                    render: self.render,
+                    biomes: self.biomes,
+                    tints: &tints,
+                    origin: [center.x * 16, base_y, center.z * 16],
+                    options,
+                },
+                &mut out,
+            );
+            out.finish_sprite_layers();
+            return out;
+        }
         if self.leaf_culling.is_interior() {
             scratch
                 .leaf

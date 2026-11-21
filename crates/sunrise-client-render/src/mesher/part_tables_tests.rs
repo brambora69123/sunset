@@ -68,6 +68,7 @@ fn tables(overlay: bool) -> MeshTables {
         section_geometry: std::sync::Arc::new([]),
         colormaps: Vec::new(),
         water_colormap: None,
+        era: None,
     }
 }
 
