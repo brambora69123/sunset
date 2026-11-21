@@ -2435,15 +2435,15 @@ impl Game<'_> {
                 self.streaming.reload_resources(&mut self.world, context);
             }
         }
-        let biomes: Vec<u16> = registries
-            .registries
-            .get(BIOME_REGISTRY)
-            .map(|list| {
-                list.iter()
-                    .map(|(name, _)| world_biomes!(self).id(name))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let biomes: Vec<u16> = match registries.registries.get(BIOME_REGISTRY) {
+            Some(list) => list
+                .iter()
+                .map(|(name, _)| world_biomes!(self).id(name))
+                .collect(),
+            // A server that sends no biome registry (a 1.7.10 root) numbers its
+            // biomes as the client's own table does: the wire id is the index.
+            None => (0..world_biomes!(self).list.len() as u16).collect(),
+        };
         self.server_items = self.server_items(&registries);
         if let Some(r) = self.remote.as_mut() {
             r.enchantments = enchantments;

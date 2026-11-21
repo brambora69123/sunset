@@ -513,7 +513,30 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
     }
     let data = root.join("data/minecraft");
     let entity_types = super::entity_type_rows::entity_type_rows(root).ids.clone();
-    let (timelines, markers) = overworld_timelines(root);
+    let (mut timelines, mut markers) = overworld_timelines(root);
+    // 1.7.10 has no timelines or markers: `TimeCommand` reads `day` and `night`
+    // as absolute times, and sets them as such.
+    if crate::sunset17_assets::detect(root) {
+        timelines.clear();
+        markers = vec![
+            (
+                "minecraft:day".to_owned(),
+                TimeMarker {
+                    ticks: 1000,
+                    period: None,
+                    show: true,
+                },
+            ),
+            (
+                "minecraft:night".to_owned(),
+                TimeMarker {
+                    ticks: 13_000,
+                    period: None,
+                    show: true,
+                },
+            ),
+        ];
+    }
     let ids = Arc::new(ResourceIds {
         // `/recipe <id>` must suggest a content mod's recipes too.
         recipes: json_ids_of_every_namespace(root, "recipe"),
@@ -2635,6 +2658,38 @@ mod tests {
                 ("minecraft:noon", 6000, Some(24000), false),
             ]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 1.7.10's `TimeCommand` reads `day` and `night` as absolute times (1000 and
+    /// 13000), not as a 26.3 timeline's next marker; the era root has no timelines.
+    #[test]
+    fn an_era_root_reads_the_era_time_words() {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "sunrise-era-time-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(crate::sunset17_assets::MANIFEST), "{}").unwrap();
+        let ids = resource_ids(&root);
+        assert!(ids.timelines.is_empty());
+        let markers: Vec<_> = ids
+            .markers
+            .iter()
+            .map(|(name, m)| (name.as_str(), m.ticks, m.period, m.show))
+            .collect();
+        assert_eq!(
+            markers,
+            [
+                ("minecraft:day", 1000, None, true),
+                ("minecraft:night", 13000, None, true),
+            ]
+        );
+        // `TimeCommand.setTimeOfDay`: the total becomes the word's own time.
+        let (_, night) = &ids.markers[1];
+        assert_eq!(night.resolve(40_000), Some(13_000));
         let _ = std::fs::remove_dir_all(&root);
     }
 

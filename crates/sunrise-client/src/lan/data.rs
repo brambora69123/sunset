@@ -511,14 +511,36 @@ impl SyncData {
         }
     }
     /// A 1.7.10 world's wire data: [`Self::empty`] over the era's own network
-    /// ids ([`era_builtin`]). The era has no synchronized registries, tags or
-    /// advancements to send, and its recipe payload says "no recipes" in the
+    /// ids ([`era_builtin`]). The era has no synchronized biome, item or entity
+    /// registries, tags or advancements to send; it sends the two world clocks the
+    /// engine's time sync needs, and its recipe payload says "no recipes" in the
     /// shape the client decodes.
     pub fn era(root: &Path) -> Self {
         let mut sync = Self {
             builtin: with_custom_stats(era_builtin(root)),
             ..Self::empty()
         };
+        // The engine syncs day time through `minecraft:world_clock` ids, resolved on both
+        // ends: a level's `default_clock` is sent as such an id. Without the registry the
+        // client resolves no clock, so `/time` and the ticking server both leave the frame's
+        // `day_time` at 0. 1.7.10 has the Overworld's clock (its Nether shares it) and the
+        // End's; neither has a timeline or a marker to send.
+        const CLOCKS: [&str; 2] = ["minecraft:overworld", "minecraft:the_end"];
+        sync.dynamic.registries.insert(
+            "minecraft:world_clock".into(),
+            CLOCKS
+                .iter()
+                .map(|name| ((*name).to_owned(), None))
+                .collect(),
+        );
+        sync.registries.push((
+            "minecraft:world_clock".into(),
+            Entries {
+                names: CLOCKS.iter().map(|name| (*name).to_owned()).collect(),
+                data: vec![Tag::compound(Vec::<(&str, Tag)>::new()); CLOCKS.len()],
+                from_pack: vec![false; CLOCKS.len()],
+            },
+        ));
         let (recipes, buttons) = super::recipes::update_recipes(
             &BTreeMap::new(),
             &sync,
@@ -1435,6 +1457,32 @@ mod tests {
         for (registry, ids) in &builtin.registries {
             assert_eq!(again.get(registry).unwrap().names, ids.names);
         }
+    }
+
+    /// The engine's day time travels as `minecraft:world_clock` ids both ends
+    /// resolve; without them the era's frame day time reads 0 whatever the server's
+    /// clock says. 1.7.10 has the Overworld's and the End's.
+    #[test]
+    fn an_era_world_sends_its_two_world_clocks() {
+        let sync = SyncData::era(std::path::Path::new(""));
+        assert_eq!(
+            sync.id("minecraft:world_clock", "minecraft:overworld"),
+            Some(0)
+        );
+        assert_eq!(
+            sync.id("minecraft:world_clock", "minecraft:the_end"),
+            Some(1)
+        );
+        assert_eq!(sync.dynamic.len("minecraft:world_clock"), 2);
+        let packets = sync.registry_packets(true, &crate::chunk::LevelShapes::VANILLA);
+        let clocks = packets
+            .iter()
+            .find(|p| p.registry == "minecraft:world_clock")
+            .expect("the clock registry is sent");
+        let names: Vec<&str> = clocks.entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(names, ["minecraft:overworld", "minecraft:the_end"]);
+        // The clock has no timeline or marker definition to send.
+        assert!(clocks.entries.iter().all(|e| e.data.is_none()));
     }
 
     fn pack_entries(

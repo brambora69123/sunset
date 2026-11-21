@@ -403,14 +403,18 @@ mod tests {
             source.clone(),
         ))
         .unwrap();
-        assert_eq!(biomes.list.len(), 1);
-        assert_eq!(biomes.id("minecraft:plains"), 0);
+        assert_eq!(biomes.list.len(), 61);
+        assert!(biomes.is_era());
+        assert_eq!(biomes.id("minecraft:plains"), 1);
+        assert_eq!(biomes.era_id(2), biomes.id("minecraft:desert"));
+        assert_eq!(biomes.get(biomes.era_id(2)).name, "minecraft:desert");
+        assert_eq!(biomes.get(biomes.era_id(2)).temperature, 2.0);
         assert_eq!(
-            biomes.id("minecraft:desert"),
-            0,
-            "every 1.7.10 biome id folds onto the placeholder plains"
+            biomes.era_id(40),
+            biomes.era_id(1),
+            "an id the era's layers never produce reads as plains"
         );
-        assert!(biomes.list[0].temperature > 0.79 && biomes.list[0].temperature < 0.81);
+        assert_eq!(biomes.get(biomes.era_id(9)).name, "minecraft:sky");
 
         for dimension in ["overworld", "the_nether", "the_end"] {
             let environment =

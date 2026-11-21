@@ -10,6 +10,7 @@ pub mod baked_model_views;
 pub mod ban_notice;
 pub mod bidi;
 pub mod biome;
+mod biome_1_7_10;
 pub mod block_edit;
 pub mod block_entities;
 pub mod block_entity_anim;

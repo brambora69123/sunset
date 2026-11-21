@@ -78,6 +78,9 @@ pub struct Sample<'a> {
     pub blend: Option<&'a BiomeBlend<'a>>,
     /// The biome at the camera, for attributes that don't blend.
     pub biome: Option<&'a AttributeMap>,
+    /// The camera biome's base temperature: `Biome.getSkyColor`'s argument on a
+    /// 1.7.10 root, where the sky is the biome's colour.
+    pub biome_temperature: Option<f32>,
     /// The same for the packs' biome post-process group.
     pub post_blend: Option<&'a BiomeBlend<'a>>,
     pub post_biome: Option<&'a AttributeMap>,
@@ -1297,7 +1300,11 @@ impl Environment {
         use crate::sky_1_7_10 as era;
         let time = era::time_of_day(at.day_time);
         let (rain, thunder) = (at.rain, at.thunder);
-        sky.sky_color = era::sky_color(era::PLAINS_TEMPERATURE, time, rain, thunder);
+        // `World.getSkyColor` asks the biome at the camera; plains answers until a
+        // caller names the biome, as the era table did for every lookup before it
+        // had one.
+        let temperature = at.biome_temperature.unwrap_or(era::PLAINS_TEMPERATURE);
+        sky.sky_color = era::sky_color(temperature, time, rain, thunder);
         sky.fog_color = era::fog_color(&self.dimension, time);
         sky.sunrise_color = era::sunrise_color(&self.dimension, time);
         sky.sun_angle = era::sun_angle(time);
@@ -1309,6 +1316,9 @@ impl Environment {
         sky.cloud_color = era::cloud_color(time, rain, thunder);
         sky.cloud_height = era::cloud_height(&self.dimension);
         sky.sky_light_level = era::sky_light_level(time, rain, thunder);
+        // `GameRenderer.updateLightMap`: the lightmap's sky row scales by the era's day
+        // light, so the world darkens at night with the sky.
+        sky.sky_light_factor = era::lightmap_sky_factor(time, rain, thunder);
         // `setupFog` measures the era's distances from the render distance, not from an
         // attribute; the era fog branch reads the clock itself.
         sky.fog_start = 0.0;
@@ -1432,12 +1442,33 @@ mod tests {
         });
         assert!(noon.era);
         assert_eq!(noon.sky_color, [121.0 / 255.0, 167.0 / 255.0, 1.0]);
+        assert_eq!(noon.sky_light_factor, 1.0);
+        assert_eq!(noon.sky_light_level, 15.0);
+        // `World.getSkyColor` asks the biome at the camera: plains' 0.8 is the
+        // default, while the desert (2.0) and ice plains (0.0) differ.
+        let with_biome = |temperature: f32| {
+            environment
+                .sample(&Sample {
+                    day_time: 6000,
+                    biome_temperature: Some(temperature),
+                    ..Sample::default()
+                })
+                .sky_color
+        };
+        assert_eq!(with_biome(0.8), [121.0 / 255.0, 167.0 / 255.0, 1.0]);
+        assert_eq!(with_biome(2.0), [111.0 / 255.0, 178.0 / 255.0, 1.0]);
+        assert_eq!(with_biome(0.0), [128.0 / 255.0, 161.0 / 255.0, 1.0]);
         assert_eq!(noon.fog_color[0], 0.752_941_2);
         assert_eq!(noon.sun_angle, 0.0);
         assert_eq!(noon.moon_angle, 180.0);
         assert_eq!(noon.cloud_height, 128.0);
         assert_eq!(noon.cloud_color[3], 0.8);
-        assert_eq!(noon.sky_light_level, 15.0);
+        let midnight = environment.sample(&Sample {
+            day_time: 18000,
+            ..Sample::default()
+        });
+        // `calculateAmbientLight` 0.2 at midnight: the lightmap's sky row is 0.24.
+        assert!((midnight.sky_light_factor - 0.24).abs() < 1e-6);
         let sunset = environment.sample(&Sample {
             day_time: 12000,
             ..Sample::default()

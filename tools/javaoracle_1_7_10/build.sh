@@ -136,9 +136,11 @@ EOF
 javac -d "$CLASSES" $(find "$STUBS" -name '*.java')
 
 # The world and generator probes resolve server classes first, as before;
-# RenderOracle needs the client's Block/BlockRenderer classes first.
+# RenderOracle needs the client's Block/BlockRenderer classes first, and
+# BiomeTable the client's Biome (the server's has no colours).
 javac -cp "$OUT/server-public.jar:$OUT/client-public.jar:$CLASSES" -d "$CLASSES" \
-    $(ls tools/javaoracle_1_7_10/*.java | grep -v "/Widen.java$" | grep -v "/RenderOracle.java$")
+    $(ls tools/javaoracle_1_7_10/*.java | grep -v "/Widen.java$" \
+        | grep -v "/RenderOracle.java$" | grep -v "/BiomeTable.java$")
 javac -cp "$OUT/client-public.jar:$OUT/server-public.jar:$CLASSES" -d "$CLASSES" \
-    tools/javaoracle_1_7_10/RenderOracle.java
+    tools/javaoracle_1_7_10/RenderOracle.java tools/javaoracle_1_7_10/BiomeTable.java
 echo "oracle built in $CLASSES"
