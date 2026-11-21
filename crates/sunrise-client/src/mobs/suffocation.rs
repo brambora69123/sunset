@@ -27,7 +27,11 @@ pub fn bind<'r>(
         }
         let definition = match state.name.strip_prefix("minecraft:") {
             Some("dirt_path" | "farmland" | "mud" | "soul_sand") => Always,
-            Some("piston" | "sticky_piston") => NotExtendedPiston,
+            Some("piston" | "sticky_piston") if state.properties.contains_key("extended") => {
+                NotExtendedPiston
+            }
+            // A 1.7.10 piston has metadata, not `extended`; its block is opaque.
+            Some("piston" | "sticky_piston") => Always,
             Some("mangrove_roots" | "moving_piston") => Never,
             Some(name)
                 if name.ends_with("_leaves")

@@ -936,6 +936,48 @@ fn timeline_ids(root: &ResourceSource, json: &Json, out: &mut Vec<String>, depth
     }
 }
 
+/// A 1.7.10 dimension's `WorldProvider` constants as one dimension-type JSON.
+///
+/// The era keeps its sky and fog colours in code (`getSkyColor`/`getFogColor`), not in
+/// a data file, and has no timelines: the environment gets the colours and the sky/
+/// ceiling flags, so rain and the biome layer exist where 1.7.10 has them. The missing
+/// day/night cycle is logged by the caller.
+fn dimension_1_7_10(dimension: &str) -> Json {
+    match dimension {
+        "the_nether" => serde_json::json!({
+            "has_skylight": false,
+            "has_ceiling": true,
+            "ambient_light": 0.1,
+            "coordinate_scale": 8.0,
+            "attributes": {
+                "minecraft:visual/sky_color": "#330808",
+                "minecraft:visual/fog_color": "#330808",
+            },
+        }),
+        "the_end" => serde_json::json!({
+            "has_skylight": true,
+            "has_ceiling": false,
+            "attributes": {
+                "minecraft:visual/sky_color": "#000000",
+                "minecraft:visual/fog_color": "#0b0b0b",
+            },
+        }),
+        _ => serde_json::json!({
+            "has_skylight": true,
+            "has_ceiling": false,
+            "min_y": 0,
+            "height": 256,
+            "logical_height": 256,
+            "bed_works": true,
+            "respawn_anchor_works": false,
+            "attributes": {
+                "minecraft:visual/sky_color": "#78a7ff",
+                "minecraft:visual/fog_color": "#c0d8ff",
+            },
+        }),
+    }
+}
+
 impl Environment {
     pub fn load(root: &ResourceSource) -> Result<Self> {
         Self::load_dimension(root, "overworld")
@@ -968,9 +1010,29 @@ impl Environment {
         packs: &PackModifiers,
         extra: &Json,
     ) -> Result<Self> {
-        let mut json: Json = serde_json::from_slice(
+        if crate::sunset17_assets::is_source(root) {
+            log::info!(
+                "Sunrise: 1.7.10 has no dimension_type files; {dimension} uses the era's \
+                 WorldProvider colours and no timelines (no day/night cycle in the environment)"
+            );
+            let json = dimension_1_7_10(dimension);
+            return Self::from_dimension_json(root, dimension, packs, extra, json);
+        }
+        let json: Json = serde_json::from_slice(
             &root.read(&format!("data/minecraft/dimension_type/{dimension}.json"))?,
         )?;
+        Self::from_dimension_json(root, dimension, packs, extra, json)
+    }
+
+    /// The environment layers over one dimension type's JSON, the packs' modifiers
+    /// applied. `extra` carries a level a mod added (its attributes and timelines).
+    fn from_dimension_json(
+        root: &ResourceSource,
+        dimension: &str,
+        packs: &PackModifiers,
+        extra: &Json,
+        mut json: Json,
+    ) -> Result<Self> {
         if let Some(attributes) = extra["attributes"].as_object() {
             if !json["attributes"].is_object() {
                 json["attributes"] = Json::Object(Default::default());

@@ -13,6 +13,14 @@ impl Game<'_> {
 
     pub(super) fn defer_world_entry(&mut self, entry: PendingWorldEntry) -> Result<bool> {
         self.poll_world_rest()?;
+        if let Some(error) = self.res.rest_failure() {
+            return Err(format!(
+                "1.7.10 world resources are not ported yet: {error}\n\
+                 Opening a world needs the era's block behaviour tables, which the engine \
+                 still reads in 26.3's block identity shape."
+            )
+            .into());
+        }
         if self.rest_loader.is_none() {
             return Ok(false);
         }
@@ -173,10 +181,21 @@ impl Game<'_> {
         if let Some(loader) = &self.rest_loader
             && loader.ready()?
         {
-            self.rest_loader
+            let loader = self
+                .rest_loader
                 .take()
-                .ok_or("missing world loader")?
-                .finish()?;
+                .ok_or("missing world loader")?;
+            if let Err(error) = loader.finish() {
+                // A prepared 1.7.10 root has no 26.3 block behaviours, so its
+                // world tables cannot load yet: the title stays usable and a
+                // world entry says why (`join_world_rest`).
+                if sunrise_client::sunset17_assets::detect(&self.options.resources) {
+                    log::warn!("Sunrise: 1.7.10 world resources are unavailable: {error}");
+                    self.res.note_rest_failure(error.to_string());
+                } else {
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -722,9 +741,33 @@ impl Game<'_> {
             );
         }
         if self.res.rest.get().is_none() {
-            return Err("world resources are unavailable".into());
+            // A 1.7.10 root has no world tables (see `join_world_rest`'s caller
+            // note): its menus tick without them while no mod hook can read
+            // them, and entering a world is refused in `defer_world_entry`.
+            if self.era_menus_without_world_tables() {
+                return Ok(());
+            }
+            return Err(match self.res.rest_failure() {
+                Some(error) => format!(
+                    "1.7.10 world resources are not ported yet: {error}\n\
+                     The title screen works; opening a world needs the era's block behaviour \
+                     tables, which the engine still reads in 26.3's block identity shape."
+                )
+                .into(),
+                None => "world resources are unavailable".into(),
+            });
         }
         Ok(())
+    }
+
+    /// Whether this is a client showing menus over a 1.7.10 root whose world
+    /// tables failed to load: no level, no remote, no mods that could read them.
+    fn era_menus_without_world_tables(&self) -> bool {
+        self.res.rest_failure().is_some()
+            && self.options.execution_role.is_client()
+            && self.serving.is_none()
+            && self.remote.is_none()
+            && mod_api::__private::mods().is_empty()
     }
 }
 

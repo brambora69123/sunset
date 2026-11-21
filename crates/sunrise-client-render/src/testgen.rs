@@ -23,14 +23,27 @@ impl TestTerrain {
                 .ok_or_else(|| format!("missing {name}"))?
                 .0)
         };
+        // The same scene over a prepared 1.7.10 root, whose blocks carry the era's
+        // names. The modern name wins where both exist (26.3's `minecraft:grass` is
+        // the plant, not the block).
+        let either = |modern: &str, era: &str| -> crate::Result<u32> {
+            if let Some(state) = registry.default_state(modern) {
+                return Ok(state.0);
+            }
+            let state = registry
+                .default_state(era)
+                .ok_or_else(|| format!("missing {modern} (and the 1.7.10 {era})"))?;
+            log::info!("Sunrise: 1.7.10 test terrain: {modern} is {era}");
+            Ok(state.0)
+        };
         Ok(Self {
             stone: id("minecraft:stone")?,
             dirt: id("minecraft:dirt")?,
-            grass: id("minecraft:grass_block")?,
+            grass: either("minecraft:grass_block", "minecraft:grass")?,
             water: id("minecraft:water")?,
             sand: id("minecraft:sand")?,
             bedrock: id("minecraft:bedrock")?,
-            log: id("minecraft:oak_log")?,
+            log: either("minecraft:oak_log", "minecraft:log")?,
             leaves: registry
                 .resolve(&sunrise_world::chunk::BlockState {
                     name: "minecraft:oak_leaves".into(),
@@ -40,9 +53,10 @@ impl TestTerrain {
                         ("waterlogged".to_owned(), "false".to_owned()),
                     ]
                     .into(),
-                })?
-                .0,
-            short_grass: id("minecraft:short_grass")?,
+                })
+                .map(|state| state.0)
+                .or_else(|_| either("minecraft:oak_leaves", "minecraft:leaves"))?,
+            short_grass: either("minecraft:short_grass", "minecraft:tallgrass")?,
             plains: biomes.id("minecraft:plains"),
         })
     }

@@ -328,6 +328,121 @@ mod tests {
         detect(&root).then_some(root)
     }
 
+    #[test]
+    fn the_era_tables_load_without_the_26_3_manifest() {
+        let Some(root) = root() else { return };
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let state = |name: &str| assets.registry.default_state(name).unwrap();
+
+        // The content export's rows, with the era's material names for the
+        // test scene's six layers.
+        assert_eq!(assets.registry.len(), 2379);
+        let material = |layer: usize| {
+            assets
+                .registry
+                .state(assets.material_states[layer])
+                .unwrap()
+                .name
+                .clone()
+        };
+        assert_eq!(material(0), "minecraft:bedrock");
+        assert_eq!(material(1), "minecraft:dirt");
+        assert_eq!(material(2), "minecraft:stone");
+        assert_eq!(material(3), "minecraft:sand");
+        assert_eq!(material(4), "minecraft:planks");
+        assert_eq!(material(5), "minecraft:brick_block");
+
+        // 1.7.10's heightmap counts every non-air block and its fluid flow stops
+        // at every non-air, non-fluid one.
+        assert!(assets.blocks_fluid_flow.contains("minecraft:stone"));
+        assert!(!assets.blocks_fluid_flow.contains("minecraft:water"));
+        assert!(!assets.blocks_fluid_flow.contains("minecraft:air"));
+
+        // The era's source liquids take a `level` so the modern fluid code reads
+        // them; the flowing blocks stay as the export wrote them.
+        let water = &assets
+            .registry
+            .state(state("minecraft:water"))
+            .unwrap()
+            .properties;
+        assert_eq!(water.get("level").map(String::as_str), Some("0"));
+        let flowing = &assets
+            .registry
+            .state(state("minecraft:flowing_water"))
+            .unwrap()
+            .properties;
+        assert_eq!(flowing.get("level"), None);
+        let ladder = &assets
+            .registry
+            .state(state("minecraft:ladder"))
+            .unwrap()
+            .properties;
+        assert_eq!(ladder.get("facing").map(String::as_str), Some("north"));
+
+        // The render set is the era's atlas, not a model catalog.
+        let render = RenderAssets::load_1_7_10(&ResourceRoot::directory(root.clone())).unwrap();
+        assert_eq!(render.sprite_size, 32);
+        assert!(!render.pixels.is_empty());
+        assert!(render.model_placements.is_empty() && render.model_gallery.is_empty());
+        assert!(render.sprite_layers.contains_key("minecraft:blocks/stone"));
+        assert!(
+            render
+                .sprite_layers
+                .contains_key("minecraft:block/water_still"),
+            "the era's fluid sprites answer under 26.3's names too"
+        );
+    }
+
+    #[test]
+    fn the_era_biomes_and_environment_stand_in_for_the_missing_data_files() {
+        let Some(root) = root() else { return };
+        let source = ResourceSource::directory(root.clone());
+        let biomes = crate::biome::Biomes::load(&ResourceRoot::new(
+            root.clone(),
+            root.clone(),
+            source.clone(),
+        ))
+        .unwrap();
+        assert_eq!(biomes.list.len(), 1);
+        assert_eq!(biomes.id("minecraft:plains"), 0);
+        assert_eq!(
+            biomes.id("minecraft:desert"),
+            0,
+            "every 1.7.10 biome id folds onto the placeholder plains"
+        );
+        assert!(biomes.list[0].temperature > 0.79 && biomes.list[0].temperature < 0.81);
+
+        for dimension in ["overworld", "the_nether", "the_end"] {
+            let environment =
+                crate::environment::Environment::load_dimension(&source, dimension).unwrap();
+            // The layers build; the era's dimensions supply no timelines, so a
+            // sample reads the constant dimension colours.
+            let _ = environment;
+        }
+    }
+
+    #[test]
+    fn the_era_collisions_stand_on_solid_blocks_and_not_on_water() {
+        let Some(root) = root() else { return };
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let collisions =
+            crate::collisions::load_1_7_10(assets.registry, &assets.blocks_fluid_flow).unwrap();
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        assert!(
+            collisions
+                .static_shape(stone)
+                .unwrap()
+                .is_some_and(|shape| shape.is_block())
+        );
+        assert!(
+            collisions
+                .static_shape(water)
+                .unwrap()
+                .is_some_and(|shape| shape.is_empty())
+        );
+    }
+
     /// A texture's own edge before the atlas resamples every layer to one size.
     fn native(sprites: &Sprites, texture: &Texture) -> u32 {
         let layer = sprite_layer(sprites, texture).expect("sprite has a layer");
@@ -447,10 +562,32 @@ mod tests {
         let block_files = assets.block_texture_files().count();
         let item_files = assets.item_texture_files().count();
         assert!(block_files > 0 && item_files > 0);
+        let era_names = render
+            .sprite_layers
+            .keys()
+            .filter(|name| {
+                name.starts_with("minecraft:blocks/") || name.starts_with("minecraft:items/")
+            })
+            .count();
         assert_eq!(
-            render.sprite_layers.len(),
+            era_names,
             block_files + item_files,
             "every extracted block and item texture names a layer"
+        );
+        // 26.3's fluid and breaking renderers ask for `block/<name>`; the era's
+        // names share their layer rather than adding a second one.
+        let layer = |name: &str| render.sprite_layers[name];
+        for name in ["water_still", "water_flow", "lava_still", "lava_flow"] {
+            assert_eq!(
+                layer(&format!("minecraft:block/{name}")),
+                layer(&format!("minecraft:blocks/{name}")),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            render.sprite_layers["minecraft:block/water_overlay"],
+            render.sprite_layers["minecraft:blocks/water_still"],
+            "the still sheet stands in for the missing overlay"
         );
         assert!(
             (render.texture_layers as usize) <= block_files + item_files,

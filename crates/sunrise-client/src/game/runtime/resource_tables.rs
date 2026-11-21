@@ -27,6 +27,24 @@ impl Resources {
             .get()
             .expect("world resources joined before entry")
     }
+    /// Keep why the background world tables failed: a 1.7.10 root's title stays
+    /// usable, and entering a world reports this instead.
+    pub(super) fn note_rest_failure(&self, error: String) {
+        *self
+            .rest_failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(error);
+    }
+    pub(super) fn rest_failure(&self) -> Option<String> {
+        self.rest_failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    /// Whether the world-rest tables are published (a 1.7.10 root's may not be).
+    pub(super) fn rest_ready(&self) -> bool {
+        self.rest.get().is_some()
+    }
     pub(super) fn facts(&self) -> &BlockFacts {
         &self.core.facts
     }

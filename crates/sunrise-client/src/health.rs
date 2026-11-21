@@ -813,6 +813,95 @@ impl HealthResources {
             },
         })
     }
+    /// A 1.7.10 root's damage resources: the era has no `player-float-ids.json`
+    /// and no `data/minecraft/damage_type` files, so the ids are the first two
+    /// player floats and the catalog is the damage types the era's combat uses,
+    /// under 26.3's names. A type 1.7.10 never had (`minecraft:stalagmite`,
+    /// which `PlayerHealth::new` asks for) is present with no exhaustion.
+    pub(crate) fn load_1_7_10() -> Result<Self> {
+        use serde_json::json;
+        log::info!(
+            "Sunrise: 1.7.10 has no player-float-ids.json or damage_type files; \
+             player floats are ids 0 and 1 and the era's damage types are built in"
+        );
+        let bits = |value: f32| format!("{:08x}", value.to_bits());
+        // (id, message id, exhaustion, effects, death message type)
+        const TYPES: [(&str, &str, f32, &str, &str); 22] = [
+            ("minecraft:fall", "fall", 0.0, "hurt", "fall_variants"),
+            ("minecraft:starve", "starve", 0.1, "hurt", "default"),
+            (
+                "minecraft:stalagmite",
+                "stalagmite",
+                0.0,
+                "poking",
+                "default",
+            ),
+            ("minecraft:drown", "drown", 0.0, "drowning", "default"),
+            ("minecraft:lava", "lava", 0.1, "burning", "default"),
+            ("minecraft:in_fire", "inFire", 0.1, "burning", "default"),
+            ("minecraft:on_fire", "onFire", 0.0, "burning", "default"),
+            (
+                "minecraft:out_of_world",
+                "outOfWorld",
+                0.0,
+                "hurt",
+                "intentional_game_design",
+            ),
+            ("minecraft:generic", "generic", 0.0, "hurt", "default"),
+            ("minecraft:magic", "magic", 0.0, "hurt", "default"),
+            ("minecraft:wither", "wither", 0.0, "hurt", "default"),
+            ("minecraft:anvil", "anvil", 0.1, "hurt", "default"),
+            ("minecraft:cactus", "cactus", 0.1, "poking", "default"),
+            ("minecraft:player_attack", "player", 0.1, "hurt", "default"),
+            ("minecraft:mob_attack", "mob", 0.1, "hurt", "default"),
+            ("minecraft:arrow", "arrow", 0.1, "hurt", "default"),
+            ("minecraft:thorns", "thorns", 0.0, "thorns", "default"),
+            ("minecraft:explosion", "explosion", 0.1, "hurt", "default"),
+            ("minecraft:fireball", "fireball", 0.1, "burning", "default"),
+            ("minecraft:thrown", "thrown", 0.1, "hurt", "default"),
+            (
+                "minecraft:indirect_magic",
+                "indirectMagic",
+                0.0,
+                "hurt",
+                "default",
+            ),
+            (
+                "minecraft:fly_into_wall",
+                "flyIntoWall",
+                0.0,
+                "hurt",
+                "default",
+            ),
+        ];
+        let types: Vec<_> = TYPES
+            .iter()
+            .map(|&(id, message, exhaustion, effects, death)| {
+                json!({
+                    "id": id,
+                    "message_id": message,
+                    "exhaustion": bits(exhaustion),
+                    "scaling": "when_caused_by_living_non_player",
+                    "effects": effects,
+                    "death_message_type": death,
+                })
+            })
+            .collect();
+        let damage = Catalog::from_json(
+            &json!({
+                "data_version": sunrise_world::DATA_VERSION,
+                "types": types,
+            }),
+            &json!({}),
+        )?;
+        Ok(Self {
+            damage,
+            ids: PlayerFloatIds {
+                health: 0,
+                absorption: 1,
+            },
+        })
+    }
     /// A world's frozen damage registry at open, or reloaded tags against
     /// that same registry. Player metadata IDs stay the prepared version's.
     pub fn with_packs(

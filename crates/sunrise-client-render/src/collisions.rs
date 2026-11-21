@@ -38,6 +38,108 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
     Ok(BlockCollisionRegistry::new(Arc::new(cached))?)
 }
 
+/// A 1.7.10 root's collisions: the era's export has no `cached-collision.nbt`.
+///
+/// 1.7.10 declares its shapes in code, one box per block class, and the export does
+/// not carry them. Each state therefore takes the full cube when its material blocks
+/// movement ([`blocks_fluid_flow`]: every non-air, non-fluid block, the same set the
+/// era's fluid flow stops at) and the empty shape otherwise, so terrain can be stood
+/// on while water and lava stay swimmable. Stairs, slabs and fences collide as full
+/// blocks until a 1.7.10 shape table is prepared; the loss is logged.
+pub fn load_1_7_10<'r>(
+    registry: &'r BlockRegistry,
+    blocks_fluid_flow: &std::collections::BTreeSet<String>,
+) -> Result<BlockCollisionRegistry<'r>> {
+    log::info!(
+        "Sunrise: 1.7.10 has no cached-collision.nbt; every solid block collides as a full \
+         cube (stairs, slabs and fences included) and every other state not at all"
+    );
+    let tag = collision_table(registry, blocks_fluid_flow)?;
+    let cached = CachedCollisionRegistry::from_nbt(&tag, registry)?;
+    if !cached.has_canonical_identities() {
+        return Err("1.7.10 collisions require canonical shape identities".into());
+    }
+    Ok(BlockCollisionRegistry::new(Arc::new(cached))?)
+}
+
+/// [`load_1_7_10`]'s table as the NBT `cached-collision.nbt` carries: one entry
+/// per distinct shape (the empty shape and the full cube, both canonical), then a
+/// shape id per registry state.
+fn collision_table(
+    registry: &BlockRegistry,
+    blocks_fluid_flow: &std::collections::BTreeSet<String>,
+) -> Result<sunrise_core::nbt::Tag> {
+    use sunrise_core::{
+        geometry::{Axis, VoxelShape},
+        nbt::{Compound, JavaString, Tag},
+    };
+    let key = |value: &str| JavaString::from(value);
+    // `CachedCollisionRegistry`'s table format: one entry per distinct shape, then a
+    // shape id per registry state. The two canonical shapes (empty and block) skip
+    // the geometry comparison the other entries get.
+    let entry = |shape: &VoxelShape, canonical: i8| {
+        let mut entry = Compound::new();
+        entry.insert(key("canonical"), Tag::Byte(canonical));
+        for (axis, name) in [(Axis::X, "x"), (Axis::Y, "y"), (Axis::Z, "z")] {
+            entry.insert(
+                key(name),
+                Tag::LongArray(
+                    shape
+                        .coordinates(axis)
+                        .iter()
+                        .map(|v| v.to_bits() as i64)
+                        .collect(),
+                ),
+            );
+        }
+        let cube = shape.is_cube();
+        let cells = shape.sizes().iter().product::<usize>();
+        entry.insert(
+            key("occupied"),
+            Tag::ByteArray(if cube { vec![1; cells] } else { vec![0; cells] }),
+        );
+        let axes = shape
+            .cube_coordinate_axes()
+            .iter()
+            .enumerate()
+            .fold(0i8, |bits, (axis, cube)| bits | (i8::from(*cube) << axis));
+        entry.insert(key("cube_axes"), Tag::Byte(axes));
+        entry.insert(key("cube"), Tag::Byte(i8::from(cube)));
+        let sizes = shape.sizes();
+        entry.insert(key("discrete_min"), Tag::IntArray(vec![0; 3]));
+        entry.insert(
+            key("discrete_max"),
+            Tag::IntArray(sizes.iter().map(|&v| v as i32).collect()),
+        );
+        Tag::Compound(entry)
+    };
+    let empty = VoxelShape::empty();
+    let block = VoxelShape::block();
+    let cached_shapes = (0..registry.len())
+        .map(|id| {
+            let state = registry.state(BlockStateId(id as u32));
+            i32::from(state.is_some_and(|state| blocks_fluid_flow.contains(&*state.name)))
+        })
+        .collect();
+    let mut table = Compound::new();
+    table.insert(key("DataVersion"), Tag::Int(sunrise_world::DATA_VERSION));
+    table.insert(
+        key("states"),
+        Tag::List(
+            (0..registry.len())
+                .filter_map(|id| registry.state(BlockStateId(id as u32)))
+                .map(sunrise_world::chunk::BlockState::to_nbt)
+                .collect(),
+        ),
+    );
+    table.insert(
+        key("shapes"),
+        Tag::List(vec![entry(&empty, 1), entry(&block, 2)]),
+    );
+    table.insert(key("cached_shapes"), Tag::IntArray(cached_shapes));
+    Ok(Tag::Compound(table))
+}
+
 /// The outline a mod block entity published for its block at `p`, which replaces the declared
 /// one for every entity: one lookup, and only for a state that may publish.
 pub fn published_outline<'w>(

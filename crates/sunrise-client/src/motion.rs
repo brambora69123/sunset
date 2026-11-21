@@ -186,6 +186,9 @@ impl MotionResources {
         facts: &crate::blocks::BlockFacts,
         conditions: &sunrise_world::conditions::LoadConditions,
     ) -> Result<Self> {
+        if crate::sunset17_assets::detect(root) {
+            return Self::load_1_7_10(assets, facts);
+        }
         let attributes = Arc::new(Catalog::from_json(&sunrise_world::json_file::read(
             &root.join("attributes.json"),
         )?)?);
@@ -237,6 +240,178 @@ impl MotionResources {
             crystal_sound: tag("minecraft:crystal_sound_blocks")?,
         })
     }
+
+    /// A 1.7.10 root's motion tables: the era's export carries none of
+    /// `attributes.json`, `movement-properties.nbt`, `landing-definitions.json`
+    /// or `block-tags.json`, and its block tags predate 26.3's.
+    ///
+    /// The player's attribute bases are 1.7.10's own (`SharedMonsterAttributes`)
+    /// under the engine's attribute names, every block gets 1.7.10's default
+    /// slipperiness (ice 0.98, everything else 0.6) with `LandingDefinition::Default`,
+    /// and the only tags the era has without files are ladders and vines as
+    /// climbable. Each departure is logged.
+    fn load_1_7_10(assets: &Assets, facts: &crate::blocks::BlockFacts) -> Result<Self> {
+        log::info!(
+            "Sunrise: 1.7.10 has no attributes.json, movement-properties.nbt, \
+             landing-definitions.json or block-tags.json; using the era's player \
+             attributes, default block movement (ice slippery) and full-cube suffocation"
+        );
+        let attributes = Arc::new(era_attribute_catalog()?);
+        let properties = era_movement_properties(assets.registry)?;
+        let mut definitions = BTreeMap::new();
+        for id in 0..assets.registry.len() {
+            let name = &assets
+                .registry
+                .state(BlockStateId(id as u32))
+                .ok_or("missing registry state")?
+                .name;
+            definitions.entry(name.clone()).or_insert(
+                sunrise_world::block_landing::LandingDefinition {
+                    fall: sunrise_world::block_landing::FallDefinition::Default,
+                    shelf_mushroom_bounce: false,
+                },
+            );
+        }
+        let landing = BlockLandingRegistry::new(&properties, &definitions)?;
+        let blocks = properties.bind(&MovementTags::default())?;
+        // 1.7.10 climbs ladders and vines; the era has no trapdoors/glide tag.
+        let climbable: BTreeSet<String> = ["minecraft:ladder", "minecraft:vine"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let climbing = ClimbingRegistry::new(
+            assets.registry,
+            &BTreeSet::new(),
+            &climbable,
+            &BTreeSet::new(),
+        )?;
+        Ok(Self {
+            attributes,
+            blocks,
+            climbable,
+            // 1.7.10's `isEntityInsideOpaqueBlock`: the full-cube solids its fluid
+            // flow stops at; glass and leaves are mapped away by the suffocation
+            // loader's own name rules.
+            causes_suffocation: assets.blocks_fluid_flow.clone(),
+            soul_speed_blocks: BTreeSet::new(),
+            climbing,
+            // `Entity.handleWaterMovement`/`onClimbable`: falling resets in water,
+            // on a ladder and in a vine.
+            fall_reset: ["minecraft:water", "minecraft:ladder", "minecraft:vine"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            inside_step_sound: BTreeSet::new(),
+            combination_step_sound: BTreeSet::new(),
+            crystal_sound: BTreeSet::new(),
+            landing,
+            health: crate::health::HealthResources::load_1_7_10()?,
+            fluids: FluidResources::new(assets, facts)?,
+        })
+    }
+}
+
+/// The player attribute bases 1.7.10's `SharedMonsterAttributes` and
+/// `AbstractClientPlayer` supply, under the engine's 26.3 attribute names.
+///
+/// `max_health`, `movement_speed`, `attack_damage`, `attack_speed` and
+/// `follow_range` are the era's values; the rest are the 26.3 attributes the
+/// movement, health and interaction code look up, at their vanilla defaults,
+/// so a 1.7.10 player moves and fights with the era's numbers.
+fn era_attribute_catalog() -> Result<Catalog> {
+    use serde_json::{Map, Value, json};
+    let bits = |value: f64| format!("{:016x}", value.to_bits());
+    const PLAYER: [(&str, f64, f64, f64, bool); 24] = [
+        ("minecraft:max_health", 20.0, 1.0, 1024.0, true),
+        ("minecraft:follow_range", 32.0, 0.0, 2048.0, false),
+        ("minecraft:knockback_resistance", 0.0, 0.0, 1.0, true),
+        ("minecraft:movement_speed", 0.1, 0.0, 1024.0, true),
+        ("minecraft:flying_speed", 0.05, 0.0, 1024.0, true),
+        ("minecraft:attack_damage", 1.0, 0.0, 2048.0, true),
+        ("minecraft:attack_speed", 4.0, 0.0, 1024.0, true),
+        ("minecraft:attack_knockback", 0.0, 0.0, 5.0, true),
+        ("minecraft:armor", 0.0, 0.0, 30.0, true),
+        ("minecraft:armor_toughness", 0.0, 0.0, 20.0, true),
+        ("minecraft:luck", 0.0, -1024.0, 1024.0, true),
+        ("minecraft:scale", 1.0, 0.0625, 16.0, true),
+        ("minecraft:step_height", 0.6, 0.0, 10.0, true),
+        ("minecraft:gravity", 0.08, -1.0, 1.0, true),
+        ("minecraft:jump_strength", 0.42, 0.0, 32.0, true),
+        ("minecraft:safe_fall_distance", 3.0, 0.0, 1024.0, true),
+        ("minecraft:fall_damage_multiplier", 1.0, 0.0, 100.0, true),
+        ("minecraft:oxygen_bonus", 0.0, 0.0, 1024.0, true),
+        ("minecraft:water_movement_efficiency", 0.0, 0.0, 1.0, true),
+        ("minecraft:sneaking_speed", 0.3, 0.0, 1.0, true),
+        ("minecraft:block_interaction_range", 4.5, 0.0, 64.0, true),
+        ("minecraft:entity_interaction_range", 3.0, 0.0, 64.0, true),
+        ("minecraft:mining_efficiency", 0.0, 0.0, 1024.0, true),
+        ("minecraft:movement_efficiency", 0.0, 0.0, 1.0, true),
+    ];
+    let mut attributes = Vec::with_capacity(PLAYER.len());
+    let mut defaults = Map::new();
+    for (id, default, min, max, syncable) in PLAYER {
+        attributes.push(json!({
+            "id": id,
+            "default": bits(default),
+            "min": bits(min),
+            "max": bits(max),
+            "syncable": syncable,
+        }));
+        defaults.insert(id.to_owned(), Value::String(bits(default)));
+    }
+    let mut entities = Map::new();
+    entities.insert("minecraft:player".to_owned(), Value::Object(defaults));
+    Ok(Catalog::from_json(&json!({
+        "data_version": sunrise_world::DATA_VERSION,
+        "attributes": attributes,
+        "entities": entities,
+    }))?)
+}
+
+/// 1.7.10's `Block.slipperiness` per block: ice and packed ice 0.98, every
+/// other block 0.6, with its default speed and jump factors. The era's
+/// export has no `movement-properties.nbt` to carry them.
+fn era_movement_properties(
+    registry: &sunrise_world::registry::BlockRegistry,
+) -> Result<MovementProperties<'_>> {
+    use sunrise_core::nbt::{Compound, JavaString, Tag};
+    let key = |value: &str| JavaString::from(value);
+    let mut blocks = Compound::new();
+    for id in 0..registry.len() {
+        let state = registry
+            .state(BlockStateId(id as u32))
+            .ok_or("missing registry state")?;
+        blocks.entry(key(&state.name)).or_insert_with(|| {
+            let friction: f32 = match state.name.as_str() {
+                "minecraft:ice" | "minecraft:packed_ice" => 0.98,
+                _ => 0.6,
+            };
+            let mut properties = Compound::new();
+            properties.insert(key("friction"), Tag::Float(friction.to_bits()));
+            properties.insert(key("speedFactor"), Tag::Float(1.0f32.to_bits()));
+            properties.insert(key("jumpFactor"), Tag::Float(1.0f32.to_bits()));
+            properties.insert(key("bounceRestitution"), Tag::Float(0.0f32.to_bits()));
+            properties.insert(key("fallDistanceReduction"), Tag::Float(0.0f32.to_bits()));
+            properties.insert(key("fenceGate"), Tag::Byte(0));
+            Tag::Compound(properties)
+        });
+    }
+    let mut table = Compound::new();
+    table.insert(key("DataVersion"), Tag::Int(sunrise_world::DATA_VERSION));
+    table.insert(
+        key("states"),
+        Tag::List(
+            (0..registry.len())
+                .filter_map(|id| registry.state(BlockStateId(id as u32)))
+                .map(sunrise_world::chunk::BlockState::to_nbt)
+                .collect(),
+        ),
+    );
+    table.insert(key("blocks"), Tag::Compound(blocks));
+    Ok(MovementProperties::from_nbt(
+        &Tag::Compound(table),
+        registry,
+    )?)
 }
 
 /// What the `location_changed` enchantment effects (Soul Speed) need to know

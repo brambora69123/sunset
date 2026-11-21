@@ -175,6 +175,10 @@ pub(super) fn load_core(
     let role = load_role.execution;
     let root = resources.prepared();
     let headless = !role.is_client();
+    // A prepared 1.7.10 folder: the era has no 26.3 tables beside the content
+    // export, so the loaders that read one take the era's own rules or an
+    // empty default, each with its own log line.
+    let era = sunrise_client::sunset17_assets::detect(root);
     // The model library reads every file under `assets/` and needs no
     // block registry, so it is parsed beside `Assets::load` rather than
     // after it. It used to sit inside `reload` behind both the registry
@@ -256,6 +260,13 @@ pub(super) fn load_core(
                 if headless {
                     return Ok(sunrise_world::block_render::FaceVisibility::empty());
                 }
+                if era {
+                    log::info!(
+                        "Sunrise: 1.7.10 has no occlusion.nbt or render-definitions.json; \
+                         face visibility is empty (no culling by shape)"
+                    );
+                    return Ok(sunrise_world::block_render::FaceVisibility::empty());
+                }
                 startup::time("core.visibility", || {
                     models::load_visibility(root, registry)
                 })
@@ -286,8 +297,14 @@ pub(super) fn load_core(
                     .map_err(|e| e.to_string())
             });
             let collision = Step::spawn(scope, parallel, "collision", || {
-                startup::time("core.collision", || collisions::load(root, registry))
-                    .map_err(|e| e.to_string())
+                startup::time("core.collision", || {
+                    if era {
+                        collisions::load_1_7_10(registry, &assets.blocks_fluid_flow)
+                    } else {
+                        collisions::load(root, registry)
+                    }
+                })
+                .map_err(|e| e.to_string())
             });
             let gameplay = gameplay_tables(root, assets, conditions, parallel, progress);
             (
@@ -350,7 +367,15 @@ pub(super) fn gameplay_tables(
     let (light, motion) = std::thread::scope(|scope| {
         let light = Step::spawn(scope, parallel, "light", || {
             startup::time("core.light", || {
-                LightTables::load(root, assets.registry, &facts)
+                if sunrise_client::sunset17_assets::detect(root) {
+                    log::info!(
+                        "Sunrise: 1.7.10 has no occlusion.nbt; light uses the content \
+                         export's dampening and emission with every face empty"
+                    );
+                    Ok(LightTables::new(&facts))
+                } else {
+                    LightTables::load(root, assets.registry, &facts)
+                }
             })
             .map_err(|e| e.to_string())
         });
@@ -589,6 +614,9 @@ pub(super) fn load_resources_for_mods(
     let role = load_role.execution;
     let mut root = resolved.prepared().to_path_buf();
     let headless = !role.is_client();
+    // A prepared 1.7.10 folder: its `.lang` file and bitmap font replace the
+    // 26.3 ones, which a pack stack never carries here.
+    let era = sunrise_client::sunset17_assets::detect(&root);
     let texture_atlases = if headless {
         Vec::new()
     } else {
@@ -776,7 +804,26 @@ pub(super) fn load_resources_for_mods(
         use sunrise_client::lang::{self, Language};
         // An integrated server shares the client's loaded resources and
         // language; it doesn't run this loader in production.
-        lang::set(if role.is_dedicated_server() {
+        lang::set(if era {
+            match sunrise_client::sunset17_assets::Assets::load(&root)
+                .and_then(|era| era.language())
+            {
+                Ok(language) => {
+                    log::info!(
+                        "Sunrise: 1.7.10's en_US.lang loaded ({} keys)",
+                        language.len()
+                    );
+                    language
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Sunrise: 1.7.10's en_US.lang was not loaded ({error}); \
+                         using the built-in English strings"
+                    );
+                    Language::load(&[], &settings.language)
+                }
+            }
+        } else if role.is_dedicated_server() {
             Language::load_default(&vanilla_root.to_path_buf())
         } else {
             Language::load(&[&pack.source], &settings.language)
@@ -798,6 +845,7 @@ pub(super) fn load_resources_for_mods(
             threads,
         },
         rest: std::sync::OnceLock::new(),
+        rest_failure: std::sync::Mutex::new(None),
     };
     let resources = Arc::new(resources);
     if menu {
@@ -865,11 +913,22 @@ pub(super) fn load_resources_for_mods(
             progress,
             started,
             !headless,
-        )?;
-        resources
-            .rest
-            .set(rest)
-            .map_err(|_| "world resources already loaded")?;
+        );
+        match rest {
+            Ok(rest) => {
+                resources
+                    .rest
+                    .set(rest)
+                    .map_err(|_| "world resources already loaded")?;
+            }
+            // A 1.7.10 root's world tables cannot load yet (see the report):
+            // keep the title usable and let a world entry report this.
+            Err(error) if era && role.is_client() => {
+                log::warn!("Sunrise: 1.7.10 world resources are unavailable: {error}");
+                resources.note_rest_failure(error.to_string());
+            }
+            Err(error) => return Err(error),
+        }
         None
     };
     // The world tables load (above) while the handoff's CPU work is done: the

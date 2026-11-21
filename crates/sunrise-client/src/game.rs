@@ -695,6 +695,9 @@ fn falling_block_visible(state: BlockStateId, cell: BlockStateId) -> bool {
 pub struct Resources {
     core: WorldCore,
     rest: std::sync::OnceLock<WorldRest>,
+    /// Why a 1.7.10 root's world tables could not load: the title screen stays
+    /// usable, and entering a world says this instead of panicking.
+    rest_failure: std::sync::Mutex<Option<String>>,
 }
 
 struct WorldCore {
