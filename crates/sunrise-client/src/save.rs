@@ -13,6 +13,11 @@
 //! game rules) is kept from the loaded files and written back unchanged.
 //! Worlds saved by older Sunrise builds (`region/`, `DIM-1/`, `Player` in
 //! `level.dat`) are migrated on open.
+//!
+//! A 1.7.10 world (its level.dat has the era's field set) or a world started
+//! with the 1.7.10 content root is read and written in the era's forms
+//! instead: [`save_1_7_10`](save_1_7_10) owns the chunk, `level.dat` and
+//! player layouts, and 1.7.10's `region/`, `DIM-1/` and `DIM1/` folders.
 use crate::mod_chunk_tickets::{ModTicket, ModTickets, TicketOwner};
 mod backpressure;
 use compression_pool::{CompressedWrite, compress_records};
@@ -86,6 +91,11 @@ mod gateway;
 mod loot_tests;
 mod record;
 use record::{Encoding, Record};
+// The 1.7.10 save format, a sibling of this file on disk: `save.rs` is a
+// module of its own, so the path attribute puts the era module at its side
+// (`src/save_1_7_10.rs`) rather than under a `save/` folder.
+#[path = "save_1_7_10.rs"]
+mod save_1_7_10;
 
 /// Snapshot live block entities and custom names for a save batch without
 /// mutating the world. Each map is visited once, retaining its iteration order
@@ -251,6 +261,14 @@ pub fn upgrade_older_world_with(
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
     };
+    // A 1.7.10 world is read and written by `save_1_7_10`; no DataFixer
+    // applies to it, and none could name its fields.
+    if root
+        .get("Data")
+        .is_some_and(save_1_7_10::is_1_7_10_level_data)
+    {
+        return Ok(());
+    }
     let version = root.get("Data").map_or(i64::from(DATA_VERSION), |d| {
         number(d.get("DataVersion")).unwrap_or(-1) // saves of 1.8 and before have none
     });
@@ -280,6 +298,10 @@ pub fn needs_file_fixes(world: &Path) -> bool {
     let Some(data) = root.get("Data") else {
         return false;
     };
+    // 1.7.10's files are read as they are, not fixed up.
+    if save_1_7_10::is_1_7_10_level_data(data) {
+        return false;
+    }
     let version = number(data.get("DataVersion")).unwrap_or(-1);
     i32::try_from(version).is_ok_and(sunrise_world::datafix::files::requires_file_fixing)
 }
@@ -1201,7 +1223,7 @@ pub fn client_heightmaps_in(
         .collect()
 }
 /// Vanilla light layer (nibbles, index y<<8|z<<4|x, low nibble first).
-fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
+pub(crate) fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
     let mut out = vec![0u8; 2048];
     for (i, byte) in out.iter_mut().enumerate() {
         let value = |j: usize| {
@@ -1289,6 +1311,16 @@ fn encode_full(
     items: &crate::items::Items,
     apply_block_entity_edits: bool,
 ) -> NamedTag {
+    // The 1.7.10 content root stores the era's chunk form; the block ids it
+    // names are the era export's rows, which the 26.3 palette cannot carry.
+    if save_1_7_10::registry_is_1_7_10(registry) {
+        return save_1_7_10::encode(
+            chunk,
+            shape.sky_light,
+            &save_1_7_10::biome_map(biomes),
+            biomes.list.len(),
+        );
+    }
     let sky_light = shape.sky_light;
     let mut sections = Vec::new();
     // Sky layers below the highest section with light other than 15 are
@@ -1668,6 +1700,19 @@ pub fn decode_with(
     tables: Option<&SaveTables>,
     layout: ColumnLayout,
 ) -> Option<Chunk> {
+    // A 1.7.10 chunk is the era's `Level` compound; without the era content
+    // root its block ids name other blocks, so it cannot be read.
+    if save_1_7_10::is_1_7_10_chunk(&root.tag) {
+        if !save_1_7_10::registry_is_1_7_10(registry) {
+            log::warn!(
+                "Sunrise: a 1.7.10 chunk needs the 1.7.10 content root; open the world with \
+                 `--resources {}`",
+                sunset_1_7_content::DEFAULT_DIR
+            );
+            return None;
+        }
+        return save_1_7_10::decode(root, layout, true, &save_1_7_10::biome_map(biomes));
+    }
     if text(root.tag.get("Status")).is_some_and(|s| s != "minecraft:full" && s != "full") {
         return None;
     }
@@ -1847,6 +1892,14 @@ pub fn encode_proto(
     shape: LevelShape,
     items: &crate::items::Items,
 ) -> NamedTag {
+    if save_1_7_10::registry_is_1_7_10(registry) {
+        return save_1_7_10::encode_proto(
+            &proto.column,
+            shape.sky_light,
+            &save_1_7_10::biome_map(biomes),
+            biomes.list.len(),
+        );
+    }
     let mut root = encode_with(&proto.column, registry, biomes, tables, shape, items);
     let status = if proto.decorated {
         ChunkStatus::Features
@@ -2279,6 +2332,9 @@ fn upgrade_record<'a>(
     context: impl FnOnce() -> Option<&'a DatafixContext>,
 ) -> Result<()> {
     use sunrise_world::datafix::{self, schema::Ty};
+    if save_1_7_10::is_1_7_10_chunk(&record.tag) {
+        return Ok(());
+    }
     horizon_names::adopt_in_record(folder, &mut record.tag);
     let default = if folder == Folder::Poi { 1945 } else { -1 };
     if number(record.tag.get("DataVersion")).unwrap_or(default) >= i64::from(DATA_VERSION) {
@@ -2360,6 +2416,10 @@ pub struct SaveDir {
     /// The Overworld's old-world blending cache, read when a save is requested
     /// (installed where `SavedOldWorld` is made for this same folder).
     blending_lookup: OnceLock<BlendingLookup>,
+    /// This folder is a 1.7.10 world's: its chunks carry their entities and
+    /// their villager data is `data/villages.dat`, so there are no `entities/`
+    /// or `poi/` region files to write.
+    era: bool,
 }
 fn intern_saved_fluids(root: &NamedTag) {
     if let Some(Tag::List(entities)) = root.tag.get("block_entities") {
@@ -2505,7 +2565,22 @@ impl SaveDir {
     }
 
     /// The saves of a level of `shape` at `root` (its dimension folder).
-    pub fn new(root: PathBuf, shape: LevelShape, items: Option<Arc<crate::items::Items>>) -> Self {
+    ///
+    /// A 1.7.10 world keeps the Overworld's region files in the world folder
+    /// itself and the Nether's and End's in `DIM-1` and `DIM1`; the folder is
+    /// moved there when the world (or the content root) is the era's.
+    pub fn new(
+        mut root: PathBuf,
+        shape: LevelShape,
+        items: Option<Arc<crate::items::Items>>,
+    ) -> Self {
+        let era = save_1_7_10::era_dimension_root(&root, items.as_deref());
+        let era = if let Some(folder) = era {
+            root = folder;
+            true
+        } else {
+            false
+        };
         Self {
             root,
             items,
@@ -2525,12 +2600,28 @@ impl SaveDir {
             lod_decoded: Default::default(),
             datafix_context: OnceLock::new(),
             blending_lookup: OnceLock::new(),
+            era,
         }
     }
     fn items_for_save(&self) -> Result<&Arc<crate::items::Items>> {
         self.items
             .as_ref()
             .ok_or_else(|| "cannot save chunks without a loaded item catalog".into())
+    }
+    /// A 1.7.10 world's chunks are the era's form, which only the era content
+    /// root's block ids can fill in: saving one with other resources would
+    /// write 26.3 chunks over the era's. Refused rather than overwritten.
+    fn check_chunk_format(&self, registry: &BlockRegistry) -> Result<()> {
+        if self.era && !save_1_7_10::registry_is_1_7_10(registry) {
+            return Err(format!(
+                "{} is a 1.7.10 world; open it with `--resources {}` so its chunks keep their \
+                 format",
+                self.root.display(),
+                sunset_1_7_content::DEFAULT_DIR
+            )
+            .into());
+        }
+        Ok(())
     }
     /// Mark this as a server-owned world save, not a remote cache.
     pub fn enable_trusted_fluid_load(&mut self) {
@@ -2858,8 +2949,25 @@ impl SaveDir {
             return Ok(None);
         };
         let tables = self.tables.get().map(|t| &**t);
-        let Some(mut chunk) = decode_with(&root, registry, biomes, tables, self.shape.column())
-        else {
+        let decoded = if save_1_7_10::is_1_7_10_chunk(&root.tag) {
+            if !save_1_7_10::registry_is_1_7_10(registry) {
+                log::warn!(
+                    "Sunrise: a 1.7.10 chunk needs the 1.7.10 content root; open the world with \
+                     `--resources {}`",
+                    sunset_1_7_content::DEFAULT_DIR
+                );
+                return Ok(None);
+            }
+            save_1_7_10::decode(
+                &root,
+                self.shape.column(),
+                self.shape.sky_light,
+                &save_1_7_10::biome_map(biomes),
+            )
+        } else {
+            decode_with(&root, registry, biomes, tables, self.shape.column())
+        };
+        let Some(mut chunk) = decoded else {
             return Ok(None);
         };
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
@@ -2891,6 +2999,7 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<()> {
+        self.check_chunk_format(registry)?;
         biomes.ensure_saveable()?;
         let encoding = Arc::new(Encoding {
             items: self.items_for_save()?.clone(),
@@ -2927,6 +3036,7 @@ impl SaveDir {
         registry: &BlockRegistry,
         biomes: &Biomes,
     ) -> Result<usize> {
+        self.check_chunk_format(registry)?;
         biomes.ensure_saveable()?;
         let items = self.items_for_save()?;
         if let Some(result) = self.save_disk_sync(chunks, registry, biomes, items) {
@@ -2959,6 +3069,11 @@ impl SaveDir {
         let Some(tables) = self.tables.get() else {
             return Ok(());
         };
+        // 1.7.10 keeps villager data in `data/villages.dat`; its save has no
+        // `poi/` region files at all.
+        if self.era {
+            return Ok(());
+        }
         let professions = self
             .professions
             .read()
@@ -2983,6 +3098,7 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<usize> {
+        self.check_chunk_format(registry)?;
         let encoding = self.encoding_for_save_later(chunks, registry, biomes)?;
         let records = chunks
             .iter()
@@ -3007,6 +3123,10 @@ impl SaveDir {
         self.write_entities(chunks, false)
     }
     fn write_entities(&self, chunks: Vec<((i32, i32), Vec<Tag>)>, wait: bool) -> Result<()> {
+        // 1.7.10 stores a chunk's entities inside the chunk's own record.
+        if self.era {
+            return Ok(());
+        }
         let records = chunks
             .into_iter()
             .map(|((x, z), entities)| {
@@ -3979,6 +4099,28 @@ impl Level {
             level.read_player(p);
         }
         level.player_extra = player;
+        // A 1.7.10 world: its own read, then the era fields that replace the
+        // 26.3 defaults above. Its `Data` has no `WorldGenSettings` (1.7.10
+        // keeps the seed, the preset and `MapFeatures` in level.dat itself),
+        // so the settings the engine's generator needs are made from those
+        // fields on every open rather than stored.
+        if save_1_7_10::is_1_7_10_level_data(data) {
+            save_1_7_10::read_level(&mut level, data);
+            if level.generator.is_none() {
+                level.generator = Some(WorldGenerator {
+                    data: new_world_gen_settings(
+                        level.seed,
+                        save_1_7_10::world_gen(Some(data)),
+                        None,
+                        None,
+                    ),
+                    recovered: false,
+                });
+            }
+            if let Some(player) = level.player_extra.clone() {
+                save_1_7_10::read_player(&mut level, &player);
+            }
+        }
         Some(level)
     }
     pub fn read_player(&mut self, p: &Tag) {
@@ -4400,15 +4542,39 @@ impl Level {
     }
 
     /// The player's file alone, `players/data/<singleplayer_uuid>.dat`
-    /// (`PlayerDataStorage.save`): the one level.dat names.
+    /// (`PlayerDataStorage.save`): the one level.dat names. A 1.7.10 world
+    /// keeps it at `playerdata/<uuid>.dat`, as `AlphaWorldStorage.savePlayerData`
+    /// writes it.
     pub fn write_player(&mut self, dir: &Path, items: &crate::items::Items) -> Result<()> {
+        let era = save_1_7_10::is_1_7_10_content(items);
+        self.write_player_file(dir, Some(items), era)
+    }
+
+    /// [`Self::write_player`] in the format `era` names: a 1.7.10 world's
+    /// `playerdata/<uuid>.dat` and player compound, or the 26.3 file.
+    fn write_player_file(
+        &mut self,
+        dir: &Path,
+        items: Option<&crate::items::Items>,
+        era: bool,
+    ) -> Result<()> {
         let uuid = self.ensure_player_uuid();
-        let player_file = dir
-            .join("players")
-            .join("data")
-            .join(format!("{}.dat", uuid_text(uuid)));
-        back_up_unreadable_player(&player_file);
-        write_dat(&player_file, self.player_tag(items))
+        let path = if era {
+            dir.join("playerdata")
+                .join(format!("{}.dat", uuid_text(uuid)))
+        } else {
+            dir.join("players")
+                .join("data")
+                .join(format!("{}.dat", uuid_text(uuid)))
+        };
+        back_up_unreadable_player(&path);
+        let tag = if era {
+            Tag::Compound(save_1_7_10::player_tag(self))
+        } else {
+            let items = items.ok_or("cannot save a player without a loaded item catalog")?;
+            self.player_tag(items)
+        };
+        write_dat(&path, tag)
     }
 
     fn write_internal(
@@ -4425,6 +4591,41 @@ impl Level {
             .get("Data")
             .is_some_and(|d| d.get("Player").is_some() || d.get("WorldGenSettings").is_some());
         let mut data = compound_or_empty(root.get("Data").cloned());
+        // A 1.7.10 world's `level.dat` is the era's field set, with the player
+        // compound inside it (`AnvilWorldStorage.saveData(data, playerData)`);
+        // 1.7.10 has no `data/` side files for Sunrise's own state. A saved
+        // world's own file decides its format; an era content root only
+        // starts a world that has no `level.dat` yet.
+        if save_1_7_10::is_1_7_10_level_data(&data)
+            || (matches!(&data, Tag::Compound(map) if map.is_empty())
+                && items.is_some_and(save_1_7_10::is_1_7_10_content))
+        {
+            let player = if keep_legacy_player {
+                data.get("Player").and_then(|p| match p {
+                    Tag::Compound(player) => Some(player.clone()),
+                    _ => None,
+                })
+            } else {
+                items.map(|_| save_1_7_10::player_tag(self))
+            };
+            // A new world's first spawn point is its world spawn.
+            if self.world_spawn.is_none() {
+                self.world_spawn = self.spawn.map(|s| {
+                    [
+                        s[0].floor() as i32,
+                        s[1].floor() as i32,
+                        s[2].floor() as i32,
+                    ]
+                });
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64);
+            let era = save_1_7_10::level_data(self, Some(&data), player, now);
+            put(&mut root, "Data", Tag::Compound(era));
+            write_dat(&dir.join("level.dat"), root)?;
+            return Ok(());
+        }
         let kept_player = keep_legacy_player
             .then(|| data.get("Player").cloned())
             .flatten();
@@ -4685,7 +4886,7 @@ impl Level {
             write_saved_data(dir, "game_rules", rules)?;
         }
         if let Some(items) = items {
-            self.write_player(dir, items)?;
+            self.write_player_file(dir, Some(items), false)?;
         }
         if let Some(player) = kept_player {
             put(&mut data, "Player", player);
@@ -5297,6 +5498,11 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 /// `IOWorker.createOldDataForRegion`'s test of one record: saved before DataVersion 4997, or
 /// with `blending_data`.
 fn record_is_old(root: &NamedTag) -> bool {
+    // A 1.7.10 chunk is complete: the era has no blending data and nothing
+    // before 1.7.10's format to blend from.
+    if save_1_7_10::is_1_7_10_chunk(&root.tag) {
+        return false;
+    }
     let before_blending = match root.tag.get("DataVersion") {
         Some(Tag::Int(version)) => *version < 4997,
         _ => true,

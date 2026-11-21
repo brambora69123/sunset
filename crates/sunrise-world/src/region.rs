@@ -2,6 +2,16 @@
 //! as vanilla's `RegionFile` makes them (a file opened with `open_writable`).
 //! Exports never overwrite a file: use a separate directory for offline
 //! edits and copied .mcc data.
+//!
+//! A 1.7.10 chunk record ([`is_1_7_10_chunk`]) is written with zlib whatever
+//! version the world selected, because 1.7.10's `RegionFile` reads gzip and
+//! zlib only. The rest of the container stays 26.3's: the image is the same
+//! Anvil layout (the header's location and timestamp tables, 4 KiB sectors,
+//! the length, the compression byte), and 1.7.10's reader takes every
+//! chunk's sector count from the header, so a chunk this writer places is a
+//! chunk it reads. Only the sector count differs from a Java-written file:
+//! 1.7.10 reserves `(size + 5) / 4096 + 1` sectors per chunk, so its files
+//! carry one more zeroed sector per chunk than the count the payload needs.
 use std::{
     cell::RefCell,
     fs::{self, File, OpenOptions},
@@ -45,6 +55,16 @@ pub struct ChunkRecord {
     pub compressed: Vec<u8>,
     pub timestamp: u32,
 }
+/// Whether a chunk root is 1.7.10's `{"Level": {...}}` rather than a 26.3
+/// chunk (`AnvilChunkStorage.writeChunkToNbt` against
+/// `SerializableChunkData.write`): no `DataVersion`, which starts in 1.8, and
+/// a `Level` compound with the era's section list.
+pub fn is_1_7_10_chunk(root: &sunrise_core::nbt::Tag) -> bool {
+    root.get("DataVersion").is_none()
+        && root
+            .get("Level")
+            .is_some_and(|level| level.get("Sections").is_some())
+}
 impl ChunkRecord {
     pub fn from_nbt(
         root: &NamedTag,
@@ -57,6 +77,16 @@ impl ChunkRecord {
         let write = Limits {
             max_depth: nbt::DISK_WRITE_NESTING_GUARD.max(limits.max_depth),
             ..limits
+        };
+        // 1.7.10's `RegionFile.getChunkDataInputStream` reads compression 1
+        // (gzip) and 2 (zlib) only, and its writer always makes zlib: an era
+        // chunk is zlib whatever `region-file-compression` selected. Its
+        // header timestamps are epoch seconds, as `write_region_records`
+        // stamps every record.
+        let compression = if is_1_7_10_chunk(&root.tag) {
+            Compression::Zlib
+        } else {
+            compression
         };
         let bytes = nbt::write_named(root, write).map_err(|e| invalid(e.to_string()))?;
         Ok(Self {
@@ -818,6 +848,38 @@ mod tests {
         assert_eq!(saved.compressed, record.compressed);
         assert_eq!(saved.timestamp, record.timestamp);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1.7.10's `RegionFile` reads compression 1 (gzip) and 2 (zlib) only and
+    /// writes zlib; an era chunk keeps zlib whatever version the world
+    /// selected for its own regions.
+    #[test]
+    fn an_era_chunk_record_is_zlib_whatever_compression_was_selected() {
+        use sunrise_core::nbt::Tag;
+        let era = NamedTag {
+            name: Default::default(),
+            tag: Tag::compound([(
+                "Level",
+                Tag::compound([("Sections", Tag::List(Vec::new()))]),
+            )]),
+        };
+        assert!(is_1_7_10_chunk(&era.tag));
+        let record = ChunkRecord::from_nbt(&era, Compression::Lz4, 42, Limits::saved()).unwrap();
+        assert_eq!(record.compression, Compression::Zlib);
+        assert_eq!(record.timestamp, 42);
+        assert_eq!(record.nbt(Limits::saved()).unwrap().tag, era.tag);
+
+        // A 26.3 chunk keeps the world's selected version.
+        let modern = NamedTag {
+            name: Default::default(),
+            tag: Tag::compound([
+                ("DataVersion", Tag::Int(4325)),
+                ("sections", Tag::List(Vec::new())),
+            ]),
+        };
+        assert!(!is_1_7_10_chunk(&modern.tag));
+        let record = ChunkRecord::from_nbt(&modern, Compression::Lz4, 1, Limits::saved()).unwrap();
+        assert_eq!(record.compression, Compression::Lz4);
     }
 
     /// `NbtIo.write` has no nesting limit, so a chunk tree deeper than the read limit is

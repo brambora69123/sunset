@@ -45,6 +45,12 @@ sunset-1-7-chunkgen = { path = "../v17/chunkgen" }
 sunset-1-7-carver = { path = "../v17/carver" }
 sunset-1-7-features = { path = "../v17/features" }
 sunset-1-7-content = { path = "../v17/content" }
+# The 1.7.10 save format: the era's chunk, level.dat and player NBT
+# (save_1_7_10.rs), and the block and item ids those records carry.
+sunset-1-7-chunkformat = { path = "../v17/chunkformat" }
+sunset-1-7-save = { path = "../v17/save" }
+sunset-1-7-blocks = { path = "../v17/blocks" }
+sunset-1-7-items = { path = "../v17/items" }
 sunrise-protocol = { path = "../sunrise-protocol" }
 # server.properties, eula.txt and the user lists, shared with sunrise-server.
 sunrise-server-files = { path = "../sunrise-server-files" }
