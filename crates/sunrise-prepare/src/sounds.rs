@@ -59,7 +59,7 @@ fn launcher_assets(
 }
 
 /// Where the launcher's asset store keeps the object with this SHA-1.
-fn object_path(assets: &Path, checksum: &str) -> Result<PathBuf, String> {
+pub(crate) fn object_path(assets: &Path, checksum: &str) -> Result<PathBuf, String> {
     if checksum.len() != 40 || !checksum.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("Bad asset hash {checksum:?} in the asset index"));
     }

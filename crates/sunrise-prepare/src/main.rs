@@ -26,7 +26,7 @@ Usage: sunrise-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
        sunrise-prepare fonts [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
        sunrise-prepare packs [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
        sunrise-prepare languages [--minecraft-dir PATH] [--version-json PATH] [--assets-dir PATH] [--root PATH] [--output PATH]
-       sunrise-prepare assets-1.7.10 [--client-jar PATH] [--root PATH] [--output PATH]
+       sunrise-prepare assets-1.7.10 [--client-jar PATH] [--sounds-from PATH] [--root PATH] [--output PATH]
        sunrise-prepare needs [--root PATH] [--json]
        sunrise-prepare missing-extras [--root PATH] [--output PATH] [--json]
        sunrise-prepare extras [--only KIND,...] [--minecraft-dir PATH]... [--assets-dir PATH] [--root PATH] [--output PATH] [--json]
@@ -45,6 +45,9 @@ Usage: sunrise-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
   --assets-dir PATH     The asset store, with indexes/ and objects/
                         (each of these four replaces what --minecraft-dir would give; an earlier
                         import beside --root that is still verified is reused instead)
+  --sounds-from PATH    assets-1.7.10: the launcher asset store with indexes/1.7.10.json and
+                        objects/ to copy the era's sounds from (default: Prism Launcher's,
+                        when its store has that index)
   --java-home PATH      A Java runtime of the pinned version that your launcher manages, tried
                         after JAVA_HOME and the PATH, before the official launcher's runtimes
   --root PATH           The Sunrise folder to prepare (default: the folder this program is
@@ -74,8 +77,10 @@ sunrise-prepare assets-1.7.10 extracts the 1.7.10 client JAR's block and item te
 textures, en_US language, fonts and colormaps into the 1.7.10 resource folder, and writes
 assets-1.7.10.json saying what came from where (with hashes) and which blocks register no sprite.
 It reads .local/minecraft/1.7.10/named/client.jar and writes .local/sunrise-client/1.7.10 unless
---client-jar or --output names others. 1.7.10 sounds are not in the JAR; the audio step imports
-them from the launcher's asset store.
+--client-jar or --output names others. 1.7.10 sounds are not in the JAR: it also copies
+minecraft/sounds.json and every minecraft/sounds/**.ogg object its asset index names from
+--sounds-from (default: Prism Launcher's store), checking each against the index's SHA-1 and
+recording the ones it skipped and why.
 
 sunrise-prepare panorama repairs the classic menu background in existing resources without Java.
 sunrise-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -128,6 +133,7 @@ fn main() -> ExitCode {
     let mut as_json = false;
     let mut only: Option<Vec<String>> = None;
     let mut folders: Vec<PathBuf> = Vec::new();
+    let mut sounds_from: Option<PathBuf> = None;
     let mut args = std::env::args_os().skip(1).peekable();
     let assets = args.next_if(|a| {
         matches!(
@@ -194,6 +200,12 @@ fn main() -> ExitCode {
                 value("--libraries-dir").map(|v| options.inputs.libraries_dir = Some(v))
             }
             "--assets-dir" => value("--assets-dir").map(|v| options.inputs.assets_dir = Some(v)),
+            "--sounds-from"
+                if assets.as_deref().and_then(|a| a.to_str()) == Some("assets-1.7.10") =>
+            {
+                value("--sounds-from").map(|v| sounds_from = Some(v))
+            }
+            "--sounds-from" => Err("--sounds-from is for assets-1.7.10".into()),
             "--java-home" => value("--java-home").map(|v| options.java_home = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
             "--output" => value("--output").map(|v| options.output = Some(v)),
@@ -320,6 +332,7 @@ fn main() -> ExitCode {
             &options.root,
             options.output.as_deref(),
             options.inputs.client_jar.as_deref(),
+            sounds_from.as_deref(),
             &log,
         ),
         _ => sunrise_prepare::prepare_with_progress(&options, &log, &progress).and_then(

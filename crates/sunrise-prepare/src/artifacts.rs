@@ -88,7 +88,7 @@ impl Lock {
     }
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var_os(var)
         .map(PathBuf::from)

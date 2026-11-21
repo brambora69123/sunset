@@ -249,6 +249,11 @@ impl SoundRegistry {
             };
             registry.add_file(namespace, &text, &exists);
         }
+        // A 1.7.10 root's own table names its block sounds `dig.*`/`step.*`; the era module
+        // adds the engine ids that ask for them. 26.3's roots keep their ids unchanged.
+        if crate::sunset17_assets::is_source(root) {
+            crate::sound_1_7_10::add_engine_events(&mut registry);
+        }
         registry
     }
     /// No sound event at all: the resources hold no `sounds.json` (sounds not
@@ -287,6 +292,28 @@ impl SoundRegistry {
             }
         }
     }
+    /// Adds `event` as a reference to `target`, the `{"name": "...", "type": "event"}` entry a
+    /// `sounds.json` writes: the referenced pool's files, weights and volume/pitch decide what
+    /// plays, as `SoundPool.get` does for such an entry. Nothing is added when `target` is not
+    /// registered (its files are not there to play).
+    pub fn add_event_reference(&mut self, event: &str, target: &str) {
+        if !self.events.contains_key(target) {
+            return;
+        }
+        let subtitle = self.events[target].subtitle.clone();
+        let entry = self
+            .events
+            .entry(event.to_owned())
+            .or_insert_with(|| WeighedSoundEvents {
+                sounds: Vec::new(),
+                subtitle,
+            });
+        entry.sounds.push(Sound {
+            event: true,
+            ..Sound::file(target)
+        });
+    }
+
     pub fn get(&self, event: &str) -> Option<&WeighedSoundEvents> {
         self.events.get(event)
     }

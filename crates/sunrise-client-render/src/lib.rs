@@ -150,6 +150,7 @@ pub mod signs;
 pub mod skins;
 pub mod sky_1_7_10;
 pub mod social;
+pub mod sound_1_7_10;
 pub mod sound_engine;
 pub mod sound_events;
 pub mod sound_preview;

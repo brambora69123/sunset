@@ -8,8 +8,11 @@
 //! source and SHA-256 so a later run re-extracts only what changed.
 //!
 //! The JAR does not hold the era's sounds: 1.7.10 keeps them in the launcher's asset object store
-//! (`assets/indexes/` and `assets/objects/`), so the manifest records that gap and the audio step
-//! reads them from the player's install instead of this module inventing files.
+//! (`assets/indexes/` and `assets/objects/`). [`import_sounds`] reads the store's `1.7.10.json`
+//! index, checks every object against its own SHA-1 and copies `minecraft/sounds.json` and the
+//! `.ogg` files under `minecraft/sounds/` into the prepared folder, where the engine's sound
+//! loader reads them; the manifest records each one's hash and every object it skipped with the
+//! reason. Nothing is downloaded and nothing is invented.
 //!
 //! [`block_texture`], [`block_textures`] and [`item_texture`] answer the renderer's question:
 //! which sprite does 1.7.10 register for this id and metadata, on this face. The mapping is
@@ -40,6 +43,9 @@ pub const MANIFEST: &str = "assets-1.7.10.json";
 /// [`MANIFEST`]'s layout: bump it when a field's meaning changes, so a later run re-extracts
 /// instead of trusting an older file.
 pub const MANIFEST_SCHEMA: i64 = 1;
+
+/// The asset index a launcher keeps for the era, whose `objects` name the sounds.
+pub const SOUNDS_INDEX: &str = "1.7.10.json";
 
 /// Vanilla's face ids: 0 bottom, 1 top, 2 north, 3 south, 4 west, 5 east.
 pub const FACE_BOTTOM: u8 = 0;
@@ -529,6 +535,7 @@ pub fn extract(jar: &Path, dir: &Path, log: Log) -> Result<Summary, String> {
         .map_err(|e| format!("{}: {e}", jar.display()))?
         .len();
     let previous = previous_files(dir, &jar_sha256);
+    let imported_sounds = previous_sounds(dir, &jar_sha256);
     let mut wanted: Vec<&str> = names
         .iter()
         .map(String::as_str)
@@ -584,7 +591,15 @@ pub fn extract(jar: &Path, dir: &Path, log: Log) -> Result<Summary, String> {
         textureless_blocks: rows.len() - textured,
     };
     let manifest = crate::pyjson::dumps(
-        &manifest(jar, &jar_sha256, jar_bytes, &files, &rows, &names),
+        &manifest(
+            jar,
+            &jar_sha256,
+            jar_bytes,
+            &files,
+            &rows,
+            &names,
+            imported_sounds,
+        ),
         &crate::pyjson::INDENT2,
     ) + "\n";
     write_if_changed(&dir.join(MANIFEST), manifest.as_bytes())?;
@@ -605,17 +620,323 @@ pub fn extract(jar: &Path, dir: &Path, log: Log) -> Result<Summary, String> {
 }
 
 /// [`extract`] with the preparer's defaults: the imported 1.7.10 client JAR at [`DEFAULT_JAR`]
-/// and the prepared folder at [`DEFAULT_DIR`]. Returns the folder written.
+/// and the prepared folder at [`DEFAULT_DIR`], then [`import_sounds`] from `sounds_from` or the
+/// launcher store [`default_sounds_store`] finds. Returns the folder written.
 pub fn prepare(
     root: &Path,
     output: Option<&Path>,
     jar: Option<&Path>,
+    sounds_from: Option<&Path>,
     log: Log,
 ) -> Result<PathBuf, String> {
     let jar = jar.map_or_else(|| root.join(DEFAULT_JAR), Path::to_path_buf);
     let dir = crate::resources_dir(root, VERSION, output);
     extract(&jar, &dir, log)?;
+    let store = match sounds_from {
+        Some(store) => Some(store.to_path_buf()),
+        None => default_sounds_store(),
+    };
+    match store {
+        Some(store) => {
+            import_sounds(&store, &dir, log)?;
+        }
+        None => log(&format!(
+            "1.7.10 sounds not imported: no launcher asset store with indexes/{SOUNDS_INDEX} \
+             was found; pass --sounds-from <store>"
+        )),
+    }
     Ok(dir)
+}
+
+/// What one [`import_sounds`] did with the era's sound objects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SoundSummary {
+    /// Objects the index names as sounds (`sounds.json` and the `.ogg` files).
+    pub indexed: usize,
+    /// Objects present in the store.
+    pub found: usize,
+    /// Objects whose bytes match the index's SHA-1.
+    pub verified: usize,
+    /// Objects written to the prepared folder this run.
+    pub copied: usize,
+    /// Objects already there with the index's bytes.
+    pub unchanged: usize,
+    /// Objects missing from the store or not matching the index, skipped.
+    pub skipped: usize,
+    /// Bytes of the verified objects.
+    pub bytes: u64,
+}
+
+struct SoundFile {
+    path: String,
+    sha1: String,
+    bytes: u64,
+}
+
+struct SkippedSound {
+    path: String,
+    reason: String,
+}
+
+/// The stores [`default_sounds_store`] looks in, most specific first: Prism Launcher's (its
+/// standard data folder, then its Flatpak one) and MultiMC's, each with the `assets` folder the
+/// launcher keeps its index and objects in.
+fn sounds_store_candidates() -> Vec<PathBuf> {
+    let home = crate::artifacts::home();
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
+    if cfg!(windows) {
+        let app_data = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.clone());
+        return vec![app_data.join("PrismLauncher/assets")];
+    }
+    if cfg!(target_os = "macos") {
+        return vec![home.join("Library/Application Support/PrismLauncher/assets")];
+    }
+    vec![
+        data.join("PrismLauncher/assets"),
+        home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/assets"),
+        data.join("multimc/assets"),
+    ]
+}
+
+/// The launcher asset store holding the era's index, when one of the folders [`prepare`] knows
+/// holds it: the player's own install, never a download.
+pub fn default_sounds_store() -> Option<PathBuf> {
+    sounds_store_candidates()
+        .into_iter()
+        .find(|store| store.join("indexes").join(SOUNDS_INDEX).is_file())
+}
+
+/// Whether an asset index entry is one of the era's sounds: its `sounds.json` table or a sound
+/// file under `sounds/`.
+fn is_sound_asset(name: &str) -> bool {
+    name == "minecraft/sounds.json"
+        || (name.starts_with("minecraft/sounds/") && name.ends_with(".ogg"))
+}
+
+/// Copies the era's sounds from the launcher asset store at `store` into `dir`, checking every
+/// object against the SHA-1 its index names and skipping (never accepting) a missing or
+/// mismatched one. The files land where the engine's sound loader reads them
+/// (`assets/minecraft/sounds.json`, `assets/minecraft/sounds/**.ogg`) and the manifest records
+/// each verified file and every skip with its reason.
+pub fn import_sounds(store: &Path, dir: &Path, log: Log) -> Result<SoundSummary, String> {
+    let index_path = store.join("indexes").join(SOUNDS_INDEX);
+    if !index_path.is_file() {
+        return Err(format!(
+            "{} is not a launcher asset store for 1.7.10: no {}; pass --sounds-from <store>",
+            store.display(),
+            index_path.display()
+        ));
+    }
+    let index_bytes =
+        fs::read(&index_path).map_err(|e| format!("{}: {e}", index_path.display()))?;
+    let index_sha1 = crate::hex(&<sha1::Sha1 as sha1::Digest>::digest(&index_bytes));
+    let index_text =
+        std::str::from_utf8(&index_bytes).map_err(|e| format!("{}: {e}", index_path.display()))?;
+    let index =
+        crate::pyjson::loads(index_text).map_err(|e| format!("{}: {e}", index_path.display()))?;
+    let objects = index
+        .get("objects")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{} has no objects", index_path.display()))?;
+    if !objects
+        .iter()
+        .any(|(name, _)| name == "minecraft/sounds.json")
+    {
+        return Err(format!(
+            "{} is not the 1.7.10 asset index: it names no minecraft/sounds.json",
+            index_path.display()
+        ));
+    }
+
+    let lock = hold_lock(dir, log)?;
+    let mut summary = SoundSummary::default();
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    let mut wanted: Vec<(&String, &Value)> = objects
+        .iter()
+        .filter(|(name, _)| is_sound_asset(name))
+        .map(|(name, info)| (name, info))
+        .collect();
+    wanted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    for (name, info) in wanted {
+        summary.indexed += 1;
+        let skip = |reason: String, skipped: &mut Vec<SkippedSound>| {
+            log(&format!("1.7.10 sound {name} skipped: {reason}"));
+            skipped.push(SkippedSound {
+                path: name.clone(),
+                reason,
+            });
+        };
+        let Some(hash) = info.get("hash").and_then(Value::as_str) else {
+            skip("the index gives no hash".into(), &mut skipped);
+            summary.skipped += 1;
+            continue;
+        };
+        let Some(size) = info
+            .get("size")
+            .and_then(Value::as_i64)
+            .and_then(|size| u64::try_from(size).ok())
+        else {
+            skip("the index gives no size".into(), &mut skipped);
+            summary.skipped += 1;
+            continue;
+        };
+        let Some(relative) = crate::artifacts::safe_relative(name) else {
+            skip("unsafe asset name in the index".into(), &mut skipped);
+            summary.skipped += 1;
+            continue;
+        };
+        let Ok(source) = crate::sounds::object_path(store, hash) else {
+            skip("the index gives no usable SHA-1".into(), &mut skipped);
+            summary.skipped += 1;
+            continue;
+        };
+        if !source.is_file() {
+            skip(format!("missing object {}", source.display()), &mut skipped);
+            summary.skipped += 1;
+            continue;
+        }
+        summary.found += 1;
+        let actual = match digest(&source, "sha1") {
+            Ok(actual) => actual,
+            Err(error) => {
+                skip(error, &mut skipped);
+                summary.skipped += 1;
+                continue;
+            }
+        };
+        if actual != hash {
+            skip(
+                format!("the object's bytes are sha1 {actual}, the index says {hash}"),
+                &mut skipped,
+            );
+            summary.skipped += 1;
+            continue;
+        }
+        let destination = dir.join("assets").join(relative);
+        let up_to_date =
+            destination.is_file() && digest(&destination, "sha1").is_ok_and(|sha| sha == hash);
+        if up_to_date {
+            summary.unchanged += 1;
+        } else {
+            match crate::files::Import::stage(&source, &destination, hash, "sha1", false)
+                .and_then(crate::files::Import::commit)
+            {
+                Ok(_) => summary.copied += 1,
+                Err(error) => {
+                    skip(
+                        format!("could not write {}: {error}", destination.display()),
+                        &mut skipped,
+                    );
+                    summary.skipped += 1;
+                    continue;
+                }
+            }
+        }
+        summary.verified += 1;
+        summary.bytes += size;
+        files.push(SoundFile {
+            path: destination
+                .strip_prefix(dir)
+                .unwrap_or(&destination)
+                .to_string_lossy()
+                .replace('\\', "/"),
+            sha1: hash.to_owned(),
+            bytes: size,
+        });
+    }
+
+    record_sounds(dir, store, &index_sha1, &summary, &files, &skipped)?;
+    drop(lock);
+    log(&format!(
+        "1.7.10 sound assets ready: {} objects ({} verified, {} copied, {} unchanged, {} skipped), \
+         {:.1} MB from {}",
+        summary.indexed,
+        summary.verified,
+        summary.copied,
+        summary.unchanged,
+        summary.skipped,
+        summary.bytes as f64 / 1e6,
+        store.display()
+    ));
+    Ok(summary)
+}
+
+/// Writes the import into the era manifest, keeping its files and blocks: the store, the index's
+/// SHA-1, the counts, each verified file's hash and every skip with its reason.
+fn record_sounds(
+    dir: &Path,
+    store: &Path,
+    index_sha1: &str,
+    summary: &SoundSummary,
+    files: &[SoundFile],
+    skipped: &[SkippedSound],
+) -> Result<(), String> {
+    let mut manifest = read_json(&dir.join(MANIFEST))?;
+    let in_client_jar = manifest
+        .get("sounds")
+        .and_then(|sounds| sounds.get("in_client_jar"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    // What the folder holds, not what this run did: `copied` and `unchanged` differ between a
+    // first import and an idempotent one, and a manifest that changed for that reason would not
+    // be the same record of the same content.
+    let counts = Value::Object(vec![
+        ("indexed".into(), Value::Int(summary.indexed.to_string())),
+        ("found".into(), Value::Int(summary.found.to_string())),
+        ("verified".into(), Value::Int(summary.verified.to_string())),
+        ("skipped".into(), Value::Int(summary.skipped.to_string())),
+        ("bytes".into(), Value::Int(summary.bytes.to_string())),
+    ]);
+    let files = files
+        .iter()
+        .map(|file| {
+            Value::Object(vec![
+                ("path".into(), Value::Str(file.path.clone())),
+                ("sha1".into(), Value::Str(file.sha1.clone())),
+                ("bytes".into(), Value::Int(file.bytes.to_string())),
+            ])
+        })
+        .collect();
+    let skipped = skipped
+        .iter()
+        .map(|file| {
+            Value::Object(vec![
+                ("path".into(), Value::Str(file.path.clone())),
+                ("reason".into(), Value::Str(file.reason.clone())),
+            ])
+        })
+        .collect();
+    manifest.insert(
+        "sounds",
+        Value::Object(vec![
+            ("extracted".into(), Value::Bool(true)),
+            ("store".into(), Value::Str(store.display().to_string())),
+            ("index".into(), Value::Str(SOUNDS_INDEX.into())),
+            ("index_sha1".into(), Value::Str(index_sha1.into())),
+            (
+                "in_client_jar".into(),
+                Value::Int(in_client_jar.to_string()),
+            ),
+            ("counts".into(), counts),
+            ("files".into(), Value::Array(files)),
+            ("skipped".into(), Value::Array(skipped)),
+            (
+                "note".into(),
+                Value::Str(
+                    "the era's sounds come from the launcher's asset store, each object checked \
+                     against the index's SHA-1; see skipped for the objects it could not use"
+                        .into(),
+                ),
+            ),
+        ]),
+    );
+    let text = crate::pyjson::dumps(&manifest, &crate::pyjson::INDENT2) + "\n";
+    write_if_changed(&dir.join(MANIFEST), text.as_bytes())
 }
 
 /// The assets the era's client JAR carries. A 1.7.10 JAR without this many is not one this
@@ -653,10 +974,9 @@ fn is_asset(name: &str) -> bool {
         || name == "assets/minecraft/lang/en_US.lang"
 }
 
-fn previous_files(dir: &Path, jar_sha256: &str) -> HashMap<String, (String, u64)> {
-    let Ok(manifest) = read_json(&dir.join(MANIFEST)) else {
-        return HashMap::new();
-    };
+/// The manifest an earlier run wrote for this JAR, when it is still this layout's.
+fn previous_manifest(dir: &Path, jar_sha256: &str) -> Option<Value> {
+    let manifest = read_json(&dir.join(MANIFEST)).ok()?;
     let same = manifest.get("schema").and_then(Value::as_i64) == Some(MANIFEST_SCHEMA)
         && manifest.get("minecraft").and_then(Value::as_str) == Some(VERSION)
         && manifest
@@ -664,9 +984,13 @@ fn previous_files(dir: &Path, jar_sha256: &str) -> HashMap<String, (String, u64)
             .and_then(|jar| jar.get("sha256"))
             .and_then(Value::as_str)
             == Some(jar_sha256);
-    if !same {
+    same.then_some(manifest)
+}
+
+fn previous_files(dir: &Path, jar_sha256: &str) -> HashMap<String, (String, u64)> {
+    let Some(manifest) = previous_manifest(dir, jar_sha256) else {
         return HashMap::new();
-    }
+    };
     let mut files = HashMap::new();
     for entry in manifest
         .get("files")
@@ -685,6 +1009,15 @@ fn previous_files(dir: &Path, jar_sha256: &str) -> HashMap<String, (String, u64)
         }
     }
     files
+}
+
+/// The sound import an earlier run recorded, which a re-extraction keeps instead of writing the
+/// "not in the JAR" stub over it.
+fn previous_sounds(dir: &Path, jar_sha256: &str) -> Option<Value> {
+    let manifest = previous_manifest(dir, jar_sha256)?;
+    let sounds = manifest.get("sounds")?;
+    let imported = matches!(sounds.get("extracted"), Some(Value::Bool(true)));
+    imported.then(|| sounds.clone())
 }
 
 fn block_rows() -> Vec<BlockRow> {
@@ -725,6 +1058,7 @@ fn manifest(
     files: &[FileEntry],
     rows: &[BlockRow],
     names: &[String],
+    imported_sounds: Option<Value>,
 ) -> Value {
     let files = files
         .iter()
@@ -768,7 +1102,10 @@ fn manifest(
         ),
         ("files".into(), Value::Array(files)),
         ("blocks".into(), Value::Array(blocks)),
-        ("sounds".into(), sounds(names)),
+        (
+            "sounds".into(),
+            imported_sounds.unwrap_or_else(|| sounds(names)),
+        ),
     ])
 }
 
@@ -1572,5 +1909,273 @@ mod tests {
         assert!(block_has_texture(1));
         assert!(!block_has_texture(0));
         assert!(!block_has_texture(165), "1.7.10 has no block 165");
+    }
+
+    /// The era's sound table and a few `.ogg` objects in a launcher store, indexed by
+    /// `indexes/1.7.10.json` with the hashes the objects actually have.
+    fn sound_store(root: &Path) -> (PathBuf, Vec<(String, Vec<u8>)>) {
+        let store = root.join("store");
+        let sounds_json = br#"{
+            "dig.stone": {"category": "block", "sounds": ["dig/stone1", "dig/stone2"]},
+            "step.grass": {"category": "neutral", "sounds": ["step/grass1"]},
+            "dig.wood": {"category": "block", "sounds": ["dig/wood1"]}
+        }"#;
+        let objects: Vec<(String, Vec<u8>)> = vec![
+            ("minecraft/sounds.json".into(), sounds_json.to_vec()),
+            (
+                "minecraft/sounds/dig/stone1.ogg".into(),
+                b"OggS stone one".to_vec(),
+            ),
+            (
+                "minecraft/sounds/dig/stone2.ogg".into(),
+                b"OggS stone two".to_vec(),
+            ),
+            (
+                "minecraft/sounds/step/grass1.ogg".into(),
+                b"OggS grass".to_vec(),
+            ),
+            (
+                "minecraft/sounds/dig/wood1.ogg".into(),
+                b"OggS wood".to_vec(),
+            ),
+            // Not a sound: the store holds every asset, and the import leaves these alone.
+            (
+                "minecraft/textures/blocks/stone.png".into(),
+                b"PNG stone".to_vec(),
+            ),
+        ];
+        for (_, data) in &objects {
+            let hash = crate::hex(&<sha1::Sha1 as sha1::Digest>::digest(data));
+            let path = store.join("objects").join(&hash[..2]).join(&hash);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, data).unwrap();
+        }
+        let mut index = String::from("{\"objects\": {");
+        for (position, (name, data)) in objects.iter().enumerate() {
+            let hash = crate::hex(&<sha1::Sha1 as sha1::Digest>::digest(data));
+            let comma = if position == 0 { "" } else { ", " };
+            index += &format!(
+                "{comma}\"{name}\": {{\"hash\": \"{hash}\", \"size\": {}}}",
+                data.len()
+            );
+        }
+        index += "}}";
+        let indexes = store.join("indexes");
+        fs::create_dir_all(&indexes).unwrap();
+        fs::write(indexes.join(SOUNDS_INDEX), index).unwrap();
+        (store, objects)
+    }
+
+    fn sound_manifest(dir: &Path) -> Value {
+        let manifest = read_json(&dir.join(MANIFEST)).unwrap();
+        manifest.get("sounds").unwrap().clone()
+    }
+
+    #[test]
+    fn sounds_are_verified_and_copied_where_the_engine_reads_them() {
+        let (jar, dir, _) = extracted("sounds-import");
+        extract(&jar, &dir, &|_| {}).unwrap();
+        let (store, objects) = sound_store(jar.parent().unwrap());
+        let summary = import_sounds(&store, &dir, &|_| {}).unwrap();
+        // Five sounds: the table and the four `.ogg` files; the stone texture is left alone.
+        assert_eq!(summary.indexed, 5);
+        assert_eq!(summary.found, 5);
+        assert_eq!(summary.verified, 5);
+        assert_eq!(summary.copied, 5);
+        assert_eq!(summary.unchanged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(
+            summary.bytes,
+            objects[..5]
+                .iter()
+                .map(|(_, data)| data.len() as u64)
+                .sum::<u64>()
+        );
+        for (name, data) in &objects[..5] {
+            let relative = name.strip_prefix("minecraft/").unwrap();
+            let path = dir.join("assets/minecraft").join(relative);
+            assert_eq!(&fs::read(&path).unwrap(), data, "{}", path.display());
+        }
+        // The store's texture object is not a sound: the JAR's copy stays as extracted.
+        assert_eq!(
+            fs::read(dir.join("assets/minecraft/textures/blocks/stone.png")).unwrap(),
+            b"stone"
+        );
+
+        let sounds = sound_manifest(&dir);
+        assert_eq!(
+            sounds.get("extracted"),
+            Some(&Value::Bool(true)),
+            "the manifest does not say the sounds were imported"
+        );
+        assert_eq!(
+            sounds.get("index").and_then(Value::as_str),
+            Some(SOUNDS_INDEX)
+        );
+        assert_eq!(
+            sounds
+                .get("counts")
+                .and_then(|c| c.get("verified"))
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        let files = sounds.get("files").and_then(Value::as_array).unwrap();
+        assert_eq!(files.len(), 5);
+        let mut paths: Vec<&str> = files
+            .iter()
+            .map(|file| file.get("path").and_then(Value::as_str).unwrap())
+            .collect();
+        let sorted = paths.clone();
+        paths.sort_unstable();
+        assert_eq!(paths, sorted, "the manifest's sound files are not sorted");
+        for file in files {
+            let path = file.get("path").and_then(Value::as_str).unwrap();
+            let data = &objects
+                .iter()
+                .find(|(name, _)| format!("assets/{name}") == path)
+                .unwrap()
+                .1;
+            assert_eq!(
+                file.get("sha1").and_then(Value::as_str),
+                Some(crate::hex(&<sha1::Sha1 as sha1::Digest>::digest(data)).as_str())
+            );
+            assert_eq!(
+                file.get("bytes").and_then(Value::as_i64),
+                Some(data.len() as i64)
+            );
+        }
+        assert!(sounds
+            .get("skipped")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        // The extraction's own records are still there.
+        let manifest = read_json(&dir.join(MANIFEST)).unwrap();
+        assert_eq!(
+            manifest
+                .get("blocks")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            blocks().len()
+        );
+    }
+
+    #[test]
+    fn a_second_sound_import_copies_nothing_and_an_extraction_keeps_it() {
+        let (jar, dir, _) = extracted("sounds-idempotent");
+        extract(&jar, &dir, &|_| {}).unwrap();
+        let (store, _) = sound_store(jar.parent().unwrap());
+        import_sounds(&store, &dir, &|_| {}).unwrap();
+        let manifest = fs::read(dir.join(MANIFEST)).unwrap();
+        let second = import_sounds(&store, &dir, &|_| {}).unwrap();
+        assert_eq!(second.copied, 0);
+        assert_eq!(second.unchanged, second.indexed);
+        assert_eq!(fs::read(dir.join(MANIFEST)).unwrap(), manifest);
+        // Re-extracting the JAR rewrites the manifest but keeps the imported sounds' record.
+        extract(&jar, &dir, &|_| {}).unwrap();
+        let sounds = sound_manifest(&dir);
+        assert_eq!(sounds.get("extracted"), Some(&Value::Bool(true)));
+        assert_eq!(
+            sounds
+                .get("counts")
+                .and_then(|c| c.get("verified"))
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert_eq!(
+            fs::read(dir.join("assets/minecraft/sounds/dig/stone1.ogg")).unwrap(),
+            b"OggS stone one"
+        );
+    }
+
+    #[test]
+    fn missing_and_mismatched_objects_are_skipped_and_say_why() {
+        let (jar, dir, _) = extracted("sounds-skipped");
+        extract(&jar, &dir, &|_| {}).unwrap();
+        let (store, objects) = sound_store(jar.parent().unwrap());
+        // One object is gone from the store, another no longer hashes to its index entry.
+        let hash = |data: &[u8]| crate::hex(&<sha1::Sha1 as sha1::Digest>::digest(data));
+        fs::remove_file(
+            store
+                .join("objects")
+                .join(&hash(&objects[1].1)[..2])
+                .join(hash(&objects[1].1)),
+        )
+        .unwrap();
+        fs::write(
+            store
+                .join("objects")
+                .join(&hash(&objects[2].1)[..2])
+                .join(hash(&objects[2].1)),
+            b"not the object",
+        )
+        .unwrap();
+        let lines = std::cell::RefCell::new(Vec::new());
+        let summary = import_sounds(&store, &dir, &|line| {
+            lines.borrow_mut().push(line.to_string())
+        })
+        .unwrap();
+        assert_eq!(summary.indexed, 5);
+        assert_eq!(summary.verified, 3);
+        assert_eq!(summary.copied, 3);
+        assert_eq!(summary.skipped, 2);
+        assert!(lines
+            .borrow()
+            .iter()
+            .any(|line| line.contains("dig/stone1.ogg") && line.contains("missing object")));
+        assert!(lines
+            .borrow()
+            .iter()
+            .any(|line| line.contains("dig/stone2.ogg") && line.contains("sha1")));
+        assert!(!dir.join("assets/minecraft/sounds/dig/stone1.ogg").exists());
+        assert!(!dir.join("assets/minecraft/sounds/dig/stone2.ogg").exists());
+        let sounds = sound_manifest(&dir);
+        assert_eq!(
+            sounds
+                .get("counts")
+                .and_then(|c| c.get("skipped"))
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        let skipped: Vec<(&str, &str)> = sounds
+            .get("skipped")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.get("path").and_then(Value::as_str).unwrap(),
+                    entry.get("reason").and_then(Value::as_str).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(skipped.len(), 2);
+        assert!(skipped
+            .iter()
+            .any(|(path, reason)| *path == "minecraft/sounds/dig/stone1.ogg"
+                && reason.contains("missing object")));
+        assert!(skipped
+            .iter()
+            .any(|(path, reason)| *path == "minecraft/sounds/dig/stone2.ogg"
+                && reason.contains("sha1")));
+    }
+
+    #[test]
+    fn a_store_without_the_eras_index_is_refused() {
+        let (jar, dir, _) = extracted("sounds-no-index");
+        let empty = jar.parent().unwrap().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let error = import_sounds(&empty, &dir, &|_| {}).unwrap_err();
+        assert!(error.contains("no "), "{error}");
+        assert!(error.contains(SOUNDS_INDEX), "{error}");
+        let (store, _) = sound_store(jar.parent().unwrap());
+        fs::write(
+            store.join("indexes").join(SOUNDS_INDEX),
+            "{\"objects\": {}}",
+        )
+        .unwrap();
+        let error = import_sounds(&store, &dir, &|_| {}).unwrap_err();
+        assert!(error.contains("no minecraft/sounds.json"), "{error}");
     }
 }
