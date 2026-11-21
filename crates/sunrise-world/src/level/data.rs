@@ -273,6 +273,16 @@ pub enum ItemKind {
     Other,
 }
 
+/// Resolves a named block, letting the 1.7.10 flowing blocks fall back to the
+/// single fluid block a 26.3 registry has.
+fn resolve_name(table: &StateTable, name: &'static str) -> Option<BlockId> {
+    table.block_by_name(name).or_else(|| match name {
+        "minecraft:flowing_water" => table.block_by_name("minecraft:water"),
+        "minecraft:flowing_lava" => table.block_by_name("minecraft:lava"),
+        _ => None,
+    })
+}
+
 macro_rules! named_blocks {
     ($($field:ident = $name:literal,)*) => {
         /// Blocks referenced by identity in vanilla code (`Blocks.X`).
@@ -283,7 +293,8 @@ macro_rules! named_blocks {
             const TEST_NAMES: &'static [&'static str] = &[$(concat!("minecraft:", $name),)*];
 
             pub(super) fn resolve(table: &StateTable) -> io::Result<Self> {
-                Ok(Self { $($field: table.block_by_name(concat!("minecraft:", $name)).ok_or_else(|| invalid(concat!("missing block ", $name)))?,)* })
+                Ok(Self { $($field: resolve_name(table, concat!("minecraft:", $name))
+                    .ok_or_else(|| invalid(concat!("missing block ", $name)))?,)* })
             }
         }
     };
@@ -1635,5 +1646,39 @@ impl GameplayStateSource for Value {
             .and_then(|s| s.get("id"))
             .and_then(Value::as_str)
             .unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A 26.3 registry has one water block and one lava block; the 1.7.10
+    /// liquid code names the flowing blocks separately, so they resolve to
+    /// the same fluid block instead of failing the load.
+    #[test]
+    fn a_26_3_registry_falls_back_to_water_and_lava_for_flowing_names() {
+        // Every named block a 26.3 registry has: one `water` and one `lava`,
+        // and no separate flowing blocks.
+        let mut states = Vec::new();
+        let mut defaults = serde_json::Map::new();
+        for &name in Named::TEST_NAMES {
+            if name.ends_with(":flowing_water") || name.ends_with(":flowing_lava") {
+                continue;
+            }
+            if defaults.contains_key(name) {
+                continue;
+            }
+            defaults.insert(name.into(), json!(states.len()));
+            states.push(json!([name, false, false, "",
+                {"id": name, "properties": {"meta": "0"}}]));
+        }
+        let facts = json!({"states": states, "defaults": defaults});
+        let registry = BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap();
+        let table = StateTable::new(&registry).unwrap();
+        let named = Named::resolve(&table).unwrap();
+        assert_eq!(named.flowing_water, named.water);
+        assert_eq!(named.flowing_lava, named.lava);
     }
 }
