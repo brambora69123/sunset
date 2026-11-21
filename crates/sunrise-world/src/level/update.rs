@@ -302,6 +302,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     // ---- scheduled ticks ----
+    /// `ServerLevel.scheduleTick(x, y, z, block, delay, priority)`.
     pub fn schedule_tick(&mut self, pos: BlockPos, block: BlockId, delay: i32) -> ScheduleResult {
         self.schedule_tick_priority(pos, block, delay, TickPriority::Normal)
     }
@@ -309,11 +310,39 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         &mut self,
         pos: BlockPos,
         block: BlockId,
-        delay: i32,
+        mut delay: i32,
         priority: TickPriority,
     ) -> ScheduleResult {
+        // A world generation feature that placed a spring ticks the flowing
+        // liquid right here, and every tick it schedules until it clears the
+        // flag (`LiquidFallFeature`).
+        if self.ticks.do_ticks_immediately && block != self.b.named.air {
+            let state = self.state(pos);
+            if self.b.block(state) == block && self.block_accepts_immediate_ticks(state) {
+                if self.area_loaded(pos, 8) {
+                    self.tick_block(state, pos);
+                }
+                return ScheduleResult::Added;
+            }
+            delay = 1;
+        }
         let time = self.level.game_time();
         self.ticks.schedule_block(time, pos, block, delay, priority)
+    }
+    /// `Block.acceptsImmediateTicks`: the flowing liquids and fire.
+    fn block_accepts_immediate_ticks(&self, state: BlockStateId) -> bool {
+        self.b.is_liquid_flowing(state) || self.b.data(state).is(super::classes::Class::Fire)
+    }
+    /// `World.isAreaLoaded(pos, range)` over the loaded chunks.
+    pub(crate) fn area_loaded(&self, pos: BlockPos, range: i32) -> bool {
+        if pos.y + range < self.level.min_y() || pos.y - range >= self.level.max_y() {
+            return false;
+        }
+        let (x0, z0) = ((pos.x - range) >> 4, (pos.z - range) >> 4);
+        let (x1, z1) = ((pos.x + range) >> 4, (pos.z + range) >> 4);
+        (x0..=x1).all(|cx| {
+            (z0..=z1).all(|cz| self.level.is_loaded(BlockPos::new(cx * 16, pos.y, cz * 16)))
+        })
     }
     pub fn schedule_fluid_tick(
         &mut self,
@@ -480,13 +509,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
-    /// `Level.removeBlock`.
+    /// `Level.removeBlock`: 1.7.10 has no waterlogged states, so the cell
+    /// becomes air (the level hook may still replace it).
     pub fn remove_block(&mut self, pos: BlockPos, moved_by_piston: bool) -> bool {
-        let fluid = self.fluid_at(pos);
-        let legacy = self.b.legacy_block(fluid);
         let replacement =
             self.level
-                .adjust_remove_block(pos, self.state(pos), moved_by_piston, legacy);
+                .adjust_remove_block(pos, self.state(pos), moved_by_piston, self.b.air());
         self.set_block(pos, replacement, 3 | if moved_by_piston { 64 } else { 0 })
     }
     /// `Level.destroyBlock(pos, dropResources, null, limit)`.
@@ -499,9 +527,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if drop {
             self.drop_resources(state, pos);
         }
-        let fluid = self.fluid_at(pos);
-        let legacy = self.b.legacy_block(fluid);
-        let destroyed = self.set_block_limit(pos, legacy, 3, limit);
+        let destroyed = self.set_block_limit(pos, self.b.air(), 3, limit);
         if destroyed {
             self.game_event_state(pos, "minecraft:block_destroy", state);
         }

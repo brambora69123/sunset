@@ -4,20 +4,22 @@ use super::{states::BlockId, update::NeighborUpdater};
 use crate::fluid::FluidKind;
 use sunrise_core::fast_hash::FxHashMap;
 use sunrise_core::{
-    geometry::VoxelShape,
     position::{BlockPos, ChunkPos},
     ticks::{
         ChunkTicks, LevelTicks, ScheduleResult, ScheduledTick, TickError, TickPriority, TickTypeId,
     },
 };
-
 /// Owned by the caller next to its chunk storage. Chunks must be registered
 /// with [`Ticks::add_chunk`] before ticks can be scheduled in them, mirroring
 /// vanilla's `LevelTicks.allContainers` (scheduling elsewhere is dropped).
 pub struct Ticks {
-    /// Block ticks keyed by `BlockId` (vanilla Block registry ID).
+    /// Block ticks keyed by `BlockId` (vanilla Block registry ID). 1.7.10's
+    /// liquids schedule their follow-up ticks here too, keyed by the liquid
+    /// block (`water`, `flowing_water`, ...), as `World.scheduleTick` does.
     pub blocks: LevelTicks,
-    /// Fluid ticks keyed by `FluidKind::tick_id`, vanilla's Fluid registry ID for its own.
+    /// Fluid ticks keyed by `FluidKind::tick_id`: the engine's fluid-tick API
+    /// for callers that schedule one directly. A 1.7.10 liquid never does; its
+    /// tick is the block's.
     pub fluids: LevelTicks,
     sub_tick: i64,
     /// `Level.randValue`, the LCG behind `getBlockRandomPos`.
@@ -57,10 +59,13 @@ pub struct Ticks {
     /// Worldgen shape updates collect the ticks they schedule here, for the
     /// proto chunks of their region, instead of scheduling them.
     pub(crate) capture: Option<Vec<CapturedTick>>,
-    /// Fluid passage results between published shapes, by the shapes' identity (a publish makes
-    /// a new shape, so a changed shape never finds an old result). Each entry keeps its shapes
-    /// alive, so an identity is never reused while it is here; the list is cleared when it fills.
-    pub(crate) published_passages: Vec<(VoxelShape, VoxelShape, u8, bool)>,
+    /// `World.doTicksImmediately`: a world generation feature placing a spring
+    /// makes the flowing liquid tick inside `scheduleTick` itself, and every
+    /// follow-up tick the same way, until the feature clears it.
+    pub do_ticks_immediately: bool,
+    /// `FallingBlock.fallImmediately`: chunk population makes a falling block
+    /// move inside its tick instead of spawning an entity.
+    pub fall_immediately: bool,
 }
 /// A tick scheduled while `Ticks::capture` is set.
 #[derive(Clone, Copy, Debug)]
@@ -98,7 +103,8 @@ impl Ticks {
             block_event_keys: Default::default(),
             handling_tick: false,
             capture: None,
-            published_passages: Vec::new(),
+            do_ticks_immediately: false,
+            fall_immediately: false,
         }
     }
     /// Register a loaded chunk's saved block and fluid ticks.

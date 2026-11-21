@@ -1,60 +1,81 @@
-//! Gravity blocks: `FallingBlock.tick`, `FallingBlockEntity.fall` and the
-//! landing branch of `FallingBlockEntity.tick`. The falling entity itself
+//! 1.7.10 gravity blocks: `FallingBlock.onAdded`/`neighborChanged` (a
+//! scheduled tick two ticks on), `FallingBlock.tick` and its `tryFall`, and
+//! the landing branch of `FallingBlockEntity.tick`. The falling entity itself
 //! (motion, collision, entity damage) is simulated by the caller.
-use super::{Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, update::below};
+use super::{
+    Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, flags, update::below,
+};
 use crate::registry::BlockStateId;
-use sunrise_core::{geometry::Direction, position::BlockPos};
+use sunrise_core::position::BlockPos;
+
+/// `FallingBlock.canFallThrough`: air, fire, water and lava.
+fn can_fall_through(b: &Behaviours, state: BlockStateId) -> bool {
+    b.is_air(state) || b.data(state).is(Class::Fire) || b.liquid_of(state).is_some()
+}
 
 /// Outcome of [`Behaviours::falling_block_landed`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Landing {
-    /// The block was placed at the position (concrete powder may have
-    /// solidified); discard the entity.
+    /// The block was placed at the position; discard the entity.
     Placed(BlockStateId),
-    /// The block could not be placed: discard the entity and, if the entity
-    /// drops items, run `Fallable.onBrokenAfterFall` (the anvil's level event
-    /// 1029) and spawn the block's item from the entity's position (vanilla
-    /// `spawnAtLocation`).
+    /// The block could not be placed: discard the entity and drop its item.
     Broken,
     /// The landing position holds a moving piston: keep falling.
     Continue,
 }
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
-    /// `FallingBlockEntity.fall`.
-    pub(crate) fn falling_block_fall(
+    /// `FallingBlock.tryFall`'s entity branch: the block is removed and the
+    /// caller spawns a falling-block entity carrying `state`.
+    pub(crate) fn falling_block_spawn(
         &mut self,
         pos: BlockPos,
         state: BlockStateId,
         hurt_per_distance: Option<f32>,
     ) {
-        let b = self.b;
-        let carried = b
-            .table
-            .with_bool(state, b.props.waterlogged, false)
-            .unwrap_or(state);
-        let legacy = b.legacy_block(b.fluid(state));
-        self.set_block_and_update(pos, legacy);
+        self.set_block_and_update(pos, self.b.air());
         self.emit(LevelEvent::FallingBlock {
             pos,
-            state: carried,
+            state,
             hurt_per_distance,
         });
     }
-    /// `FallingBlock.tick` (and `SpeleothemBlock`'s falling stalactites).
-    pub(crate) fn falling_block_tick(&mut self, pos: BlockPos, state: BlockStateId) {
-        if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {
-            self.falling_block_fall(pos, state, None);
+    /// `FallingBlock.tryFall`'s immediate branch: the block moves down inside
+    /// this call, without an entity. The landing write uses metadata 0, as
+    /// `World.setBlock` does in 1.7.10.
+    fn falling_block_move(&mut self, pos: BlockPos, state: BlockStateId) {
+        self.set_block(pos, self.b.air(), flags::UPDATE_ALL);
+        let mut y = pos.y;
+        while y > 0 && can_fall_through(self.b, self.state(BlockPos::new(pos.x, y - 1, pos.z))) {
+            y -= 1;
+        }
+        if y > 0 {
+            let placed = self.b.default_of(self.b.block(state));
+            self.set_block(BlockPos::new(pos.x, y, pos.z), placed, flags::UPDATE_ALL);
         }
     }
-    /// `SpeleothemBlock.spawnFallingStalactite`.
+    /// `FallingBlock.tick`.
+    pub(crate) fn falling_block_tick(&mut self, pos: BlockPos, state: BlockStateId) {
+        if !can_fall_through(self.b, self.below_state(pos)) || pos.y < 0 {
+            return;
+        }
+        if self.ticks.fall_immediately || !self.area_loaded(pos, 32) {
+            self.falling_block_move(pos, state);
+        } else {
+            self.falling_block_spawn(pos, state, None);
+        }
+    }
+    /// `SpeleothemBlock.spawnFallingStalactite` (a 26.3 block, kept for its
+    /// caller): each stalactite piece becomes a falling entity from the top
+    /// down, the tip carrying the damage.
     pub(crate) fn spawn_falling_stalactite(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let p = b.props;
         let is_stalactite = |s: BlockStateId| {
             b.tag("minecraft:speleothems")
                 .is_some_and(|tag| b.in_set(s, tag))
-                && b.table.dir(s, p.vertical_direction) == Some(Direction::Down)
+                && b.table.dir(s, p.vertical_direction)
+                    == Some(sunrise_core::geometry::Direction::Down)
         };
         let mut fall_pos = pos;
         let mut fall_state = state;
@@ -62,7 +83,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let thickness = b.table.text(fall_state, p.thickness);
             let tip = thickness == "tip" || thickness == "tip_merge";
             let damage = tip.then_some((1 + pos.y - fall_pos.y).max(6) as f32);
-            self.falling_block_fall(fall_pos, fall_state, damage);
+            self.falling_block_spawn(fall_pos, fall_state, damage);
             if tip {
                 break;
             }
@@ -74,64 +95,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
 impl Behaviours {
     /// The landing branch of `FallingBlockEntity.tick`, called by the caller's
-    /// falling-block entity once it is on the ground (or stuck in water as
-    /// concrete powder). `state` is the carried block state.
+    /// falling-block entity once it is on the ground. `state` is the carried
+    /// block state (its metadata is the entity's).
     pub fn falling_block_landed<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         pos: BlockPos,
         state: BlockStateId,
-        stuck_in_water: bool,
+        _stuck_in_water: bool,
     ) -> Landing {
         let mut sim = self.sim(level, ticks);
         let current = sim.state(pos);
         if self.is_block(current, self.named.moving_piston) {
             return Landing::Continue;
         }
-        let concrete = self.instance_of(state, Class::ConcretePowder);
-        // DirectionalPlaceContext(level, pos, DOWN, ItemStack.EMPTY, UP).
-        let ctx = super::place::PlacementContext {
-            pos,
-            hit_pos: pos,
-            face: Direction::Up,
-            hit: sunrise_core::geometry::Vec3::new(
-                f64::from(pos.x) + 0.5,
-                f64::from(pos.y),
-                f64::from(pos.z) + 0.5,
-            ),
-            inside: false,
-            yaw: 0.0,
-            pitch: 90.0,
-            sneaking: false,
-            item: String::new(),
-            replace_clicked: true,
-        };
-        let may_replace = sim.can_be_replaced(current, &ctx);
-        let would_continue = sim.is_free(sim.below_state(pos)) && (!concrete || !stuck_in_water);
-        let would_survive =
-            sim.while_landing(pos, state, |sim| sim.can_survive(state, pos)) && !would_continue;
-        if !(may_replace && would_survive) {
+        // `World.canPlace(state, pos, true, 1, null, null)`: the target's
+        // material is replaceable (the falling entity only lands in a cell it
+        // could pass through), and `!canFallThrough(below)`.
+        if !self.is_replaceable(current) || can_fall_through(self, sim.below_state(pos)) {
             return Landing::Broken;
         }
-        let mut placed = state;
-        if self.table.has(placed, self.props.waterlogged)
-            && self.is_water_fluid(sim.fluid_at(pos).kind())
-        {
-            placed = self.table.set_bool(placed, self.props.waterlogged, true);
-        }
-        if !sim.set_block_and_update(pos, placed) {
+        if !sim.set_block_and_update(pos, state) {
             return Landing::Broken;
-        }
-        // Fallable.onLand
-        if concrete {
-            if (self.is_water_fluid(self.fluid(current).kind()) || sim.concrete_touches_liquid(pos))
-                && let Some(solid) = self.data(state).link
-            {
-                sim.set_block_and_update(pos, self.default_of(solid));
-            }
-        } else if self.instance_of(state, Class::Anvil) {
-            sim.level_event(1031, pos, 0);
         }
         Landing::Placed(sim.state(pos))
     }

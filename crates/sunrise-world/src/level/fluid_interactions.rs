@@ -1,8 +1,11 @@
 //! What a liquid block turns into beside another fluid or block (NeoForge's
-//! `FluidInteractionRegistry`): vanilla's two lava rules and the entries mods declare, as one
-//! resolved table per source fluid. Installed on [`Behaviours`] for the open world, resolved
-//! once when the world opens and again on each data reload, so no name or tag is looked up
-//! while a liquid updates.
+//! `FluidInteractionRegistry`): the 1.7.10 lava-water rule and the entries mods declare, as
+//! one resolved table per source fluid. Installed on [`Behaviours`] for the open world,
+//! resolved once when the world opens and again on each data reload.
+//!
+//! 1.7.10's own liquids do not walk this table: `LiquidBlock.checkBlockCollisions` and
+//! `FlowingLiquidBlock.tick` decide the obsidian, cobblestone and stone reactions directly
+//! in `level::fluids`. The table remains the mod API's read (`fluid_interaction_result`).
 use super::{Behaviours, data::BlockSet, states::BlockId};
 use crate::{
     fluid::{FluidKind, FluidState},
@@ -175,10 +178,14 @@ impl FluidInteractions {
 }
 
 impl Behaviours {
-    /// `LiquidBlock.shouldSpreadLiquid`'s two rules as the table's first entries, for each fluid
-    /// of the `minecraft:lava` tag (vanilla applies them to a liquid in that tag). `lava` and
-    /// `water` are the fluids of the `minecraft:lava` and `minecraft:water` tags, which a data
-    /// pack may edit.
+    /// `LiquidBlock.shouldSpreadLiquid`'s rule as the table's first entries,
+    /// for each fluid of the `minecraft:lava` tag (vanilla applies them to a
+    /// liquid in that tag): lava beside water becomes obsidian as a source and
+    /// cobblestone as a flow. The flowing level's 1..=4 limit and the
+    /// `below`-is-water stone rule are the 1.7.10 block's own branches (see
+    /// `level::fluids`), not table entries. `lava` and `water` are the fluids
+    /// of the `minecraft:lava` and `minecraft:water` tags, which a data pack
+    /// may edit.
     pub fn vanilla_fluid_interactions(
         &self,
         lava: &[FluidKind],
@@ -187,27 +194,16 @@ impl Behaviours {
         let n = &self.named;
         let state = |block| Some(self.default_of(block));
         lava.iter()
-            .flat_map(|&fluid| {
-                [
-                    (
-                        fluid,
-                        FluidInteraction {
-                            neighbour: Neighbour::FluidTag(water.into()),
-                            below: None,
-                            source: state(n.obsidian),
-                            flowing: state(n.cobblestone),
-                        },
-                    ),
-                    (
-                        fluid,
-                        FluidInteraction {
-                            neighbour: Neighbour::Blocks(BlockMatch::Block(n.blue_ice)),
-                            below: Some(BlockMatch::Block(n.soul_soil)),
-                            source: state(n.basalt),
-                            flowing: state(n.basalt),
-                        },
-                    ),
-                ]
+            .map(|&fluid| {
+                (
+                    fluid,
+                    FluidInteraction {
+                        neighbour: Neighbour::FluidTag(water.into()),
+                        below: None,
+                        source: state(n.obsidian),
+                        flowing: state(n.cobblestone),
+                    },
+                )
             })
             .collect()
     }

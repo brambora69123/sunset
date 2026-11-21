@@ -293,7 +293,9 @@ named_blocks! {
     cave_air = "cave_air",
     void_air = "void_air",
     water = "water",
+    flowing_water = "flowing_water",
     lava = "lava",
+    flowing_lava = "flowing_lava",
     stone = "stone",
     cobblestone = "cobblestone",
     obsidian = "obsidian",
@@ -523,6 +525,8 @@ macro_rules! props {
 }
 props! {
     waterlogged = "waterlogged",
+    // 1.7.10's per-state metadata: `Block.getMetadata` / `setBlockMetadata`.
+    meta = "meta",
     facing = "facing",
     half = "half",
     shape = "shape",
@@ -1183,7 +1187,6 @@ fn build_with_gameplay<G: GameplayStateSource>(
         potted_by_content,
         liquid_blocks,
         dynamic,
-        occlusion_cache: Default::default(),
         growth: Default::default(),
         block_maps: Default::default(),
         fluid_interactions: Default::default(),
@@ -1366,11 +1369,245 @@ pub(super) fn inert_support_fixture() -> Behaviours {
         potted_by_content: HashMap::new(),
         liquid_blocks: FluidBlockBindings::new(&registry).unwrap(),
         dynamic: HashMap::new(),
-        occlusion_cache: Default::default(),
         growth: Default::default(),
         block_maps: Default::default(),
         fluid_interactions: Default::default(),
     }
+}
+
+/// A 1.7.10-shaped fixture for the liquid and gravity tests: every named
+/// block exists, the four liquid blocks carry metadata `0..=15` (and a
+/// `level` property only so [`FluidBlockBindings`] can be built), and the
+/// class chains the behaviour dispatch reads are set.
+#[cfg(test)]
+pub(super) fn liquid_1_7_10_fixture() -> (BlockRegistry, Behaviours) {
+    use crate::fluid::{FluidKind, FluidState};
+    use serde_json::{Map, json};
+
+    let mut states = Vec::new();
+    let mut defaults = Map::new();
+    for &name in Named::TEST_NAMES {
+        if defaults.contains_key(name) {
+            continue;
+        }
+        defaults.insert(name.into(), json!(states.len()));
+        if matches!(
+            name,
+            "minecraft:water"
+                | "minecraft:flowing_water"
+                | "minecraft:lava"
+                | "minecraft:flowing_lava"
+        ) {
+            // Sorted property order is `level`, then `meta`; `meta` varies
+            // fastest, as `StateTable` expects.
+            for level in 0..16 {
+                for meta in 0..16 {
+                    states.push(json!([
+                        name,
+                        false,
+                        false,
+                        "",
+                        {
+                            "id": name,
+                            "properties": {
+                                "level": level.to_string(),
+                                "meta": meta.to_string(),
+                            },
+                        }
+                    ]));
+                }
+            }
+        } else {
+            states.push(json!([
+                name,
+                false,
+                false,
+                "",
+                {"id": name, "properties": {"meta": "0"}}
+            ]));
+        }
+    }
+    // The tests' own blocks: `Named` only carries the blocks the vanilla
+    // behaviour code looks up by name. Sand, gravel and glass carry the
+    // metadata values 1.7.10 uses (0..=1 for sand and gravel; glass 0).
+    for name in ["minecraft:sand", "minecraft:gravel", "minecraft:glass"] {
+        if defaults.contains_key(name) {
+            continue;
+        }
+        defaults.insert(name.into(), json!(states.len()));
+        for meta in 0..16 {
+            states.push(json!([
+                name,
+                false,
+                false,
+                "",
+                {"id": name, "properties": {"meta": meta.to_string()}}
+            ]));
+        }
+    }
+    let registry = BlockRegistry::from_facts_json(
+        json!({"defaults": defaults, "states": states})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    let mut table = StateTable::new(&registry).unwrap();
+    let props = Props::resolve(&mut table);
+    let named = Named::resolve(&table).unwrap();
+    let liquid = |block: BlockId| {
+        let name = &*table.info(block).name;
+        match name {
+            "minecraft:water" => Some((FluidKind::Water, false)),
+            "minecraft:flowing_water" => Some((FluidKind::FlowingWater, true)),
+            "minecraft:lava" => Some((FluidKind::Lava, true)),
+            "minecraft:flowing_lava" => Some((FluidKind::FlowingLava, true)),
+            _ => None,
+        }
+    };
+    let blocks = (0..table.block_count())
+        .map(|index| {
+            let block = BlockId(index as u16);
+            let name = &*table.info(block).name;
+            let class = match name {
+                "minecraft:water"
+                | "minecraft:flowing_water"
+                | "minecraft:lava"
+                | "minecraft:flowing_lava" => Class::Liquid,
+                "minecraft:sand" => Class::Sand,
+                "minecraft:gravel" => Class::FallingBlock,
+                "minecraft:fire" => Class::Fire,
+                _ => Class::Block,
+            };
+            let chain = match class {
+                Class::Sand => vec![Class::Sand, Class::FallingBlock, Class::Block],
+                Class::FallingBlock | Class::Fire => vec![class, Class::Block],
+                Class::Liquid => vec![Class::Liquid, Class::Block],
+                _ => vec![Class::Block],
+            };
+            let mut classes = ClassSet::default();
+            for &class in &chain {
+                classes.insert(class);
+            }
+            BlockData {
+                class,
+                chain,
+                classes,
+                interfaces: 0,
+                set_type: None,
+                gate_open: [None, None, None],
+                gate_close: [None, None, None],
+                open_sound: None,
+                close_sound: None,
+                ticks_to_stay_pressed: 0,
+                max_weight: 0,
+                link: None,
+                link2: None,
+                support_tag: None,
+                support_tag2: None,
+                feature: None,
+                grow_probability: 0.0,
+                growth_direction: Direction::Up,
+                schedule_fluid_ticks: false,
+                declared_waterlogged: false,
+                weather: 0,
+                ignite_odds: 0,
+                burn_odds: 0,
+                sounds: Arc::new(Sounds {
+                    volume: 0.0,
+                    pitch: 0.0,
+                    place: "".into(),
+                    break_: "".into(),
+                    fall: "".into(),
+                }),
+                item: "".into(),
+                dynamic_shape: false,
+                declared_vegetation: false,
+            }
+        })
+        .collect();
+    let mut facts = Vec::with_capacity(table.state_count());
+    for index in 0..table.state_count() {
+        let state = BlockStateId(index as u32);
+        let block = table.block(state);
+        let name = &*table.info(block).name;
+        let meta = table.int(state, props.meta);
+        let mut flags = 0;
+        let fluid = match liquid(block) {
+            Some((kind, random)) => {
+                flags |=
+                    state_flags::LIQUID | state_flags::COLLISION_EMPTY | state_flags::REPLACEABLE;
+                if random {
+                    flags |= state_flags::RANDOM_TICKS;
+                }
+                let level = meta & 7;
+                FluidState::new(
+                    kind,
+                    if level == 0 { 8 } else { (8 - level) as u8 },
+                    meta >= 8,
+                )
+            }
+            None => match name {
+                "minecraft:air" => {
+                    flags |=
+                        state_flags::AIR | state_flags::COLLISION_EMPTY | state_flags::REPLACEABLE;
+                    FluidState::EMPTY
+                }
+                "minecraft:fire" => {
+                    flags |= state_flags::COLLISION_EMPTY
+                        | state_flags::REPLACEABLE
+                        | state_flags::IGNITED_BY_LAVA;
+                    FluidState::EMPTY
+                }
+                "minecraft:stone"
+                | "minecraft:dirt"
+                | "minecraft:sand"
+                | "minecraft:gravel"
+                | "minecraft:obsidian"
+                | "minecraft:cobblestone"
+                | "minecraft:glass" => FluidState::EMPTY,
+                _ => {
+                    flags |= state_flags::COLLISION_EMPTY;
+                    FluidState::EMPTY
+                }
+            },
+        };
+        facts.push(StateFacts {
+            flags,
+            sturdy: 0,
+            weak: 0,
+            strong: 0,
+            fluid,
+            emission: 0,
+            dampening: 0,
+            hardness: 0.0,
+            push: PushReaction::PushPull,
+            resolved_push: super::piston_reactions::CachedReaction::new(PushReaction::PushPull),
+            instrument: 0,
+            shape: -1,
+            collision_offset: None,
+        });
+    }
+    let behaviours = Behaviours {
+        table,
+        props,
+        named,
+        tags: Tags::default(),
+        all_tags: HashMap::new(),
+        facts,
+        shapes: Vec::new(),
+        shape_info: Vec::new(),
+        fluid_tags: FluidTags::default(),
+        fluid_definitions: HashMap::new(),
+        blocks,
+        items: HashMap::new(),
+        potted_by_content: HashMap::new(),
+        liquid_blocks: FluidBlockBindings::new(&registry).unwrap(),
+        dynamic: HashMap::new(),
+        growth: Default::default(),
+        block_maps: Default::default(),
+        fluid_interactions: Default::default(),
+    };
+    (registry, behaviours)
 }
 
 impl GameplayStateSource for Value {
