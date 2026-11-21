@@ -181,10 +181,7 @@ impl Game<'_> {
         if let Some(loader) = &self.rest_loader
             && loader.ready()?
         {
-            let loader = self
-                .rest_loader
-                .take()
-                .ok_or("missing world loader")?;
+            let loader = self.rest_loader.take().ok_or("missing world loader")?;
             if let Err(error) = loader.finish() {
                 // A prepared 1.7.10 root has no 26.3 block behaviours, so its
                 // world tables cannot load yet: the title stays usable and a

@@ -56,9 +56,7 @@ pub(super) fn load_world_rest(
         // hold its files so it is read once.
         let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));
         let sources = if era {
-            log::info!(
-                "Sunrise: 1.7.10 has no data/minecraft/recipe; the recipe tables are empty"
-            );
+            log::info!("Sunrise: 1.7.10 has no data/minecraft/recipe; the recipe tables are empty");
             std::sync::Arc::new(sunrise_client::crafting::ResolvedSources::default())
         } else {
             startup::time("rest.recipe_sources", || {
@@ -127,9 +125,7 @@ pub(super) fn load_world_rest(
         let _step = startup::step("rest.mobs");
         let catalog = &resources.motion().attributes;
         let mut types = if era {
-            log::info!(
-                "Sunrise: 1.7.10 has no entity-types.json; no mob types are registered"
-            );
+            log::info!("Sunrise: 1.7.10 has no entity-types.json; no mob types are registered");
             MobTypes {
                 types: HashMap::new(),
             }
