@@ -4330,6 +4330,10 @@ dependencies = [
  "sunrise-theme",
  "sunrise-threads",
  "sunrise-world",
+ "sunset-1-7-carver",
+ "sunset-1-7-chunkgen",
+ "sunset-1-7-content",
+ "sunset-1-7-features",
  "tempfile",
  "ureq",
  "wgpu",
@@ -5132,6 +5136,195 @@ dependencies = [
  "sunrise-mod-api-macros",
  "sunrise-threads",
  "xxhash-rust",
+]
+
+[[package]]
+name = "sunset-1-7"
+version = "0.1.0"
+
+[[package]]
+name = "sunset-1-7-assets"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-blocks"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-carver"
+version = "0.1.0"
+dependencies = [
+ "sunrise-core",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-chunkformat"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-chunkgen"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7",
+ "sunset-1-7-carver",
+ "sunset-1-7-core",
+ "sunset-1-7-features",
+ "sunset-1-7-noise",
+]
+
+[[package]]
+name = "sunset-1-7-combat"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-commands"
+version = "0.1.0"
+dependencies = [
+ "sunrise-core",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-content"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sunrise-items",
+ "sunrise-world",
+ "sunset-1-7-blocks",
+ "sunset-1-7-items",
+]
+
+[[package]]
+name = "sunset-1-7-core"
+version = "0.1.0"
+dependencies = [
+ "sunrise-core",
+]
+
+[[package]]
+name = "sunset-1-7-features"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+ "sunset-1-7-noise",
+]
+
+[[package]]
+name = "sunset-1-7-inventory"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-items"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-liquids"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-mobs"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-net"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "flate2",
+ "md-5",
+ "num-bigint",
+ "num-integer",
+ "sha1",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-noise"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-physics"
+version = "0.1.0"
+dependencies = [
+ "sunrise-core",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-protocol"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-redstone"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-render"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-save"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "sunrise-core",
+ "sunrise-deflate",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-structures"
+version = "0.1.0"
+dependencies = [
+ "sunrise-core",
+ "sunset-1-7",
+ "sunset-1-7-core",
+]
+
+[[package]]
+name = "sunset-1-7-version"
+version = "0.1.0"
+dependencies = [
+ "sunset-1-7-core",
 ]
 
 [[package]]

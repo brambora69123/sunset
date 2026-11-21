@@ -1,0 +1,21 @@
+[package]
+name = "sunset-1-7-structures"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Minecraft 1.7.10 structures, ported for sunset"
+
+[dependencies]
+sunset-1-7-core = { path = "../core" }
+# The 1.7.10 biome layer chain (`biome::init`) for the start biome checks.
+sunset-1-7 = { path = "../../sunset-1-7" }
+# `jmath` (HotSpot-exact Math) for the stronghold ring's `Math.sin`/`cos`/`round`.
+sunrise-core = { path = "../../sunrise-core" }
+
+[[bin]]
+name = "structure_probe"
+path = "src/bin/structure_probe.rs"
+
+[lints]
+workspace = true

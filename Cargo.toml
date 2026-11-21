@@ -12,6 +12,8 @@ members = [
     "crates/sunrise-heartbeat",
 
     "crates/sunrise-core",
+    "crates/sunset-1-7",
+    "crates/v17/*",
     "crates/sunrise-platform",
     "crates/sunrise-addresses",
     "crates/sunrise-mod-runtime",

@@ -1,0 +1,18 @@
+[package]
+name = "sunset-1-7-chunkgen"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Minecraft 1.7.10 chunkgen, ported for sunset"
+
+[dependencies]
+sunset-1-7-core = { path = "../core" }
+sunset-1-7-noise = { path = "../noise" }
+sunset-1-7 = { path = "../../sunset-1-7" }
+
+sunset-1-7-carver = { path = "../carver" }
+sunset-1-7-features = { path = "../features" }
+
+[lints]
+workspace = true

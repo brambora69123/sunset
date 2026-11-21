@@ -478,10 +478,21 @@ impl BlockFacts {
             let state = registry.state(id).ok_or("missing registry state")?;
             let sound = &entry.sound;
             let prop = |k: &str| state.properties.get(k).map(String::as_str);
+            // 26.3 carries the fluid level as a `level` property; 1.7.10 carries
+            // it in the block metadata, and names flowing water/lava separately.
+            let fluid_level = || -> u8 {
+                prop("level")
+                    .and_then(|v| v.parse().ok())
+                    .or_else(|| prop("meta").and_then(|v| v.parse().ok()))
+                    .unwrap_or(0)
+            };
             let (fluid, fluid_level, fluid_falling) = match state.name.as_str() {
-                "minecraft:water" | "minecraft:lava" => {
-                    let level: u8 = prop("level").and_then(|v| v.parse().ok()).unwrap_or(0);
-                    let kind = if state.name == "minecraft:water" {
+                "minecraft:water"
+                | "minecraft:flowing_water"
+                | "minecraft:lava"
+                | "minecraft:flowing_lava" => {
+                    let level = fluid_level();
+                    let kind = if state.name.ends_with("water") {
                         Fluid::Water
                     } else {
                         Fluid::Lava
@@ -502,7 +513,7 @@ impl BlockFacts {
                 | "minecraft:tall_seagrass" => (Fluid::Water, 8, false),
                 _ if prop("waterlogged") == Some("true") => (Fluid::Water, 8, false),
                 name if sunrise_world::fluid::mod_fluid_named(name).is_some() => {
-                    let level: u8 = prop("level").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let level = fluid_level();
                     match level {
                         0 => (Fluid::Modded, 8, false),
                         1..=7 => (Fluid::Modded, 8 - level, false),
