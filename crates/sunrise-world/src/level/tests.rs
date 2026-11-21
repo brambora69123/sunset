@@ -110,6 +110,13 @@ pub(crate) struct TestLevel {
     /// `Level.getWorldBorder`, for `within_world_border`: centred on the
     /// origin at vanilla's default size unless a test moves it.
     pub border: sunrise_core::geometry::border::BorderGeometry,
+    /// The build height this level reports; the 26.3 defaults unless a test
+    /// models a 1.7.10 world's `0..256`.
+    pub min_y: i32,
+    pub max_y: i32,
+    /// `Level.dimension()`: lava flows faster where the dimension has no sky
+    /// and loses less level where water does not evaporate.
+    pub dimension: sunrise_core::dimension::Dimension,
 }
 impl TestLevel {
     pub(super) fn new(b: &Behaviours) -> Self {
@@ -160,6 +167,9 @@ impl TestLevel {
                 29_999_984,
             )
             .unwrap(),
+            min_y: -64,
+            max_y: 320,
+            dimension: sunrise_core::dimension::Dimension::Overworld,
         }
     }
 }
@@ -279,6 +289,15 @@ impl LevelAccess for TestLevel {
     }
     fn is_loaded(&self, _pos: BlockPos) -> bool {
         true
+    }
+    fn min_y(&self) -> i32 {
+        self.min_y
+    }
+    fn max_y(&self) -> i32 {
+        self.max_y
+    }
+    fn dimension(&self) -> sunrise_core::dimension::Dimension {
+        self.dimension
     }
     fn random(&mut self) -> &mut LegacyRandom {
         &mut self.random
@@ -1348,207 +1367,6 @@ fn snowy_grass_and_chests_pair() {
     let air = w.b().air();
     w.set(BlockPos::new(4, 1, 0), air);
     assert_eq!(w.prop(BlockPos::new(3, 1, 0), "type"), "single");
-}
-
-#[test]
-fn sand_falls_and_concrete_solidifies() {
-    let mut w = world!();
-    let sand = w.id("sand", &[]);
-    w.set(BlockPos::new(0, 5, 0), sand);
-    w.tick();
-    w.tick();
-    assert_eq!(w.get(BlockPos::new(0, 5, 0)), w.b().air());
-    assert!(
-        w.level
-            .events
-            .iter()
-            .any(|e| matches!(e, LevelEvent::FallingBlock { state, .. } if *state == sand))
-    );
-    w.floor(0, 2, "stone");
-    let water = w.id("water", &[]);
-    w.put(BlockPos::new(1, 1, 0), water);
-    let powder = w.id("white_concrete_powder", &[]);
-    let landing = w.b().falling_block_landed(
-        &mut w.level,
-        &mut w.ticks,
-        BlockPos::new(0, 1, 0),
-        powder,
-        false,
-    );
-    assert_eq!(
-        landing,
-        falling::Landing::Placed(w.id("white_concrete", &[]))
-    );
-}
-
-#[test]
-fn water_keeps_spreading_over_waterlogged_scaffolding() {
-    // `FlowingFluid.canPassThroughWall` reads `getCollisionShape(level, pos)`,
-    // where scaffolding is the stable shape: a full top face, so the water above
-    // it is no water hole and still spreads sideways.
-    let mut w = world!();
-    w.floor(0, 10, "stone");
-    let stone = w.id("stone", &[]);
-    for x in 0..=9 {
-        w.put(BlockPos::new(x, 1, -1), stone);
-        w.put(BlockPos::new(x, 1, 1), stone);
-    }
-    let scaffolding = w.id(
-        "scaffolding",
-        &[
-            ("bottom", "false"),
-            ("distance", "0"),
-            ("waterlogged", "true"),
-        ],
-    );
-    // Stone under it keeps it supported, so its own tick leaves it in place.
-    w.put(BlockPos::new(5, -1, 0), stone);
-    w.put(BlockPos::new(5, 0, 0), scaffolding);
-    let water = w.id("water", &[]);
-    w.set(BlockPos::new(0, 1, 0), water);
-    for _ in 0..80 {
-        w.tick();
-    }
-    for d in 1..=7 {
-        let pos = BlockPos::new(d, 1, 0);
-        assert_eq!(w.prop(pos, "level"), d.to_string(), "flow at {d}");
-    }
-}
-
-#[test]
-fn refused_spread_keeps_water_out_of_a_guarded_block() {
-    let mut w = world!();
-    w.floor(0, 10, "stone");
-    w.level.guarded.insert(BlockPos::new(3, 1, 0));
-    let water = w.id("water", &[]);
-    w.set(BlockPos::new(0, 1, 0), water);
-    for _ in 0..60 {
-        w.tick();
-    }
-    assert_eq!(w.prop(BlockPos::new(2, 1, 0), "level"), "2");
-    assert_eq!(w.get(BlockPos::new(3, 1, 0)), w.b().air());
-    // Water still reaches (4, 1, 0) around the guarded block.
-    assert_eq!(w.prop(BlockPos::new(4, 1, 0), "level"), "6");
-}
-
-#[test]
-fn bucket_source_removal_drains_spread_water() {
-    let mut w = world!();
-    w.floor(0, 10, "stone");
-    let at = BlockPos::new(0, 1, 0);
-    assert!(
-        w.b()
-            .bucket_empty(
-                &mut w.level,
-                &mut w.ticks,
-                at,
-                None,
-                BucketContent::Fluid(crate::fluid::FluidKind::Water),
-                "minecraft:item.bucket.empty",
-                false,
-                false
-            )
-            .is_some()
-    );
-    for _ in 0..60 {
-        w.tick();
-    }
-    assert_ne!(w.get(BlockPos::new(1, 1, 0)), w.b().air());
-    assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
-        Some("minecraft:water_bucket")
-    );
-    for _ in 0..120 {
-        w.tick();
-    }
-    for x in -8..=8 {
-        for z in -8..=8 {
-            assert_eq!(
-                w.get(BlockPos::new(x, 1, z)),
-                w.b().air(),
-                "water remains at {x}, {z}"
-            );
-        }
-    }
-}
-
-#[test]
-fn water_falls_and_makes_sources() {
-    let mut w = world!();
-    w.floor(0, 4, "stone");
-    let water = w.id("water", &[]);
-    w.set(BlockPos::new(0, 4, 0), water);
-    for _ in 0..30 {
-        w.tick();
-    }
-    assert_eq!(
-        w.prop(BlockPos::new(0, 3, 0), "level"),
-        "8",
-        "falling water"
-    );
-    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "level"), "8");
-    // Two sources make a third (no holes within slope distance, so the
-    // sources spread in every direction).
-    let mut w = world!();
-    w.floor(0, 12, "stone");
-    w.set(BlockPos::new(0, 1, 0), water);
-    w.set(BlockPos::new(2, 1, 0), water);
-    for _ in 0..20 {
-        w.tick();
-    }
-    assert_eq!(w.get(BlockPos::new(1, 1, 0)), water);
-    // On a small platform the water instead seeks the nearest edges.
-    let mut w = world!();
-    w.floor(0, 4, "stone");
-    w.set(BlockPos::new(0, 1, 0), water);
-    w.set(BlockPos::new(2, 1, 0), water);
-    for _ in 0..20 {
-        w.tick();
-    }
-    assert_eq!(w.get(BlockPos::new(1, 1, 0)), w.b().air());
-    assert_eq!(w.prop(BlockPos::new(-1, 1, 0), "level"), "1");
-}
-
-#[test]
-fn lava_meets_water() {
-    let mut w = world!();
-    w.floor(0, 4, "stone");
-    let lava = w.id("lava", &[]);
-    let water = w.id("water", &[]);
-    w.set(BlockPos::new(0, 1, 0), lava);
-    w.set(BlockPos::new(1, 1, 0), water);
-    assert_eq!(w.get(BlockPos::new(0, 1, 0)), w.id("obsidian", &[]));
-    let mut w = world!();
-    w.floor(0, 4, "stone");
-    w.set(BlockPos::new(0, 1, 0), lava);
-    for _ in 0..40 {
-        w.tick();
-    }
-    w.set(BlockPos::new(1, 2, 0), water);
-    for _ in 0..40 {
-        w.tick();
-    }
-    assert_eq!(
-        w.get(BlockPos::new(1, 1, 0)),
-        w.id("cobblestone", &[]),
-        "{}",
-        w.name(BlockPos::new(1, 1, 0))
-    );
-}
-
-#[test]
-fn waterlogged_blocks_schedule_water() {
-    let mut w = world!();
-    w.floor(0, 4, "stone");
-    let slab = w.id("oak_slab", &[("waterlogged", "true")]);
-    w.set(BlockPos::new(0, 1, 0), slab);
-    // A neighbour shape update schedules the slab's water tick.
-    let stone = w.id("stone", &[]);
-    w.set(BlockPos::new(0, 1, 1), stone);
-    for _ in 0..20 {
-        w.tick();
-    }
-    assert_eq!(w.prop(BlockPos::new(1, 1, 0), "level"), "1");
 }
 
 #[test]
@@ -5145,6 +4963,7 @@ mod removal {
 }
 mod fluid_tick;
 mod interact;
+mod liquids;
 mod pistons;
 mod portals;
 mod redstone;

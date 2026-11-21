@@ -371,10 +371,10 @@ pub enum LevelEvent {
     /// `Block.dropResources(state, level, pos)`: the caller evaluates the
     /// block's loot table (no tool, no breaker) and pops the items.
     DropResources { pos: BlockPos, state: BlockStateId },
-    /// `FallingBlockEntity.fall`: the block at `pos` was already replaced by its
-    /// fluid's legacy block; the caller spawns and simulates a falling-block
-    /// entity carrying `state` and calls [`Behaviours::falling_block_landed`]
-    /// (or drops the item) when it lands.
+    /// `FallingBlock.tryFall`'s entity branch: the block at `pos` was removed;
+    /// the caller spawns and simulates a falling-block entity carrying `state`
+    /// and calls [`Behaviours::falling_block_landed`] (or drops the item) when
+    /// it lands.
     FallingBlock {
         pos: BlockPos,
         state: BlockStateId,
@@ -442,7 +442,8 @@ pub enum LevelEvent {
 /// What spreads from one block to another (`LevelAccess::allow_spread`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spread {
-    /// A fluid flows into the block (`FlowingFluid.spreadTo`).
+    /// A fluid flows into the block. The engine keeps the hook for its API;
+    /// 1.7.10's `FlowingLiquidBlock.tick` has no level veto and does not ask.
     Fluid,
     /// Fire spreads to the block or burns it (`FireBlock.tick`,
     /// `checkBurnOut`).
@@ -1475,11 +1476,10 @@ pub struct Behaviours {
     liquid_blocks: FluidBlockBindings,
     /// Uncached (position- or block-entity-dependent) collision shapes.
     dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
-    occlusion_cache: RwLock<HashMap<(i32, i32, u8), bool>>,
     growth: growth::Growth,
     /// The open world's NeoForge block data maps.
     block_maps: block_maps::Slot,
-    /// The open world's fluid interactions: vanilla's two lava rules and the mods' entries.
+    /// The open world's fluid interactions: the lava-water rule and the mods' entries.
     fluid_interactions: fluid_interactions::Slot,
 }
 

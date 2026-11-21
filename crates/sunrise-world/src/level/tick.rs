@@ -192,7 +192,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         kind: "brushable",
                     });
                     if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {
-                        self.falling_block_fall(pos, state, None);
+                        self.falling_block_spawn(pos, state, None);
                     }
                 }
                 Class::Farmland => {
@@ -229,11 +229,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.lightning_rod_update_neighbors(pos, state);
                 }
                 Class::Liquid => {
-                    if self.should_bubble_column_occupy(state) {
-                        let below_state = self.below_state(pos);
-                        let column = b.named.bubble_column;
-                        self.bubble_column_update_for(column, pos, state, below_state);
-                    }
+                    self.fluid_tick(pos);
                 }
                 Class::Observer => self.observer_tick(pos, state),
                 Class::Eyeblossom => self.eyeblossom_tick(state, pos, false),
@@ -282,7 +278,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
-    /// `BlockState.randomTick` followed by the fluid's random tick.
+    /// `BlockState.randomTick`: a randomly ticking block's own tick. Only
+    /// source lava has one that does anything (`LiquidSourceBlock.randomTick`);
+    /// see [`Self::random_tick_at`].
     pub fn random_tick_at(&mut self, pos: BlockPos) {
         let state = self.state(pos);
         sunrise_threads::work::set_block(self.b.block(state).0);
@@ -296,10 +294,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.random_tick_block(current, pos);
             }
         }
-        // Only lava's fluid state ticks randomly. A lava block is ticked twice
-        // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.
-        if super::fluids::fluid_randomly_ticks(self.b.fluid(state).kind()) {
-            self.lava_random_tick(pos);
+        // `LiquidSourceBlock`'s random tick: lava alone, and only the still
+        // block overrides `randomTick`.
+        if self.b.is_randomly_ticking(state) && self.b.is_block(state, self.b.named.lava) {
+            self.source_liquid_tick(pos, super::fluids::Liquid::Lava);
         }
     }
 
@@ -396,14 +394,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         }
                         self.drop_resources(state, pos);
                         self.remove_block(pos, false);
-                    }
-                }
-                Class::Liquid => {
-                    if matches!(
-                        b.fluid(state).kind(),
-                        FluidKind::Lava | FluidKind::FlowingLava
-                    ) {
-                        self.lava_random_tick(pos);
                     }
                 }
                 Class::MangrovePropagule => {
@@ -623,7 +613,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         );
         if distance == 7 {
             if b.table.int(state, b.props.distance) == 7 {
-                self.falling_block_fall(pos, next, None);
+                self.falling_block_spawn(pos, next, None);
             } else {
                 self.destroy_block(pos, true, 512);
             }

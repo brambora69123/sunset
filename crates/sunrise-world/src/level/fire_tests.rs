@@ -254,7 +254,9 @@ fn lava_queries_exact_positions_and_faces_in_both_random_tick_branches() {
     let air = w.id("air", &[]);
     // Seed 0 selects the lower branch: three draws at (0,0), (1,1), (1,1).
     *w.level.random() = LegacyRandom::new(0);
-    w.b().sim(&mut w.level, &mut w.ticks).lava_random_tick(at);
+    w.b()
+        .sim(&mut w.level, &mut w.ticks)
+        .source_liquid_tick(at, super::fluids::Liquid::Lava);
     assert_eq!(
         *w.level.lava_asks.borrow(),
         vec![
@@ -265,17 +267,20 @@ fn lava_queries_exact_positions_and_faces_in_both_random_tick_branches() {
     );
     w.level.lava_asks.borrow_mut().clear();
     // Seed 2 selects one upward pass to (3,9,5); air never short-circuits.
+    // 1.7.10 asks west, east, north, south, below, above in that order.
     *w.level.random() = LegacyRandom::new(2);
-    w.b().sim(&mut w.level, &mut w.ticks).lava_random_tick(at);
+    w.b()
+        .sim(&mut w.level, &mut w.ticks)
+        .source_liquid_tick(at, super::fluids::Liquid::Lava);
     assert_eq!(
         *w.level.lava_asks.borrow(),
         vec![
-            (air, BlockPos::new(3, 8, 5), Direction::Up),
-            (air, BlockPos::new(3, 10, 5), Direction::Down),
-            (air, BlockPos::new(3, 9, 4), Direction::South),
-            (air, BlockPos::new(3, 9, 6), Direction::North),
-            (air, BlockPos::new(2, 9, 5), Direction::East),
-            (air, BlockPos::new(4, 9, 5), Direction::West),
+            (air, BlockPos::new(2, 9, 5), Direction::West),
+            (air, BlockPos::new(4, 9, 5), Direction::East),
+            (air, BlockPos::new(3, 9, 4), Direction::North),
+            (air, BlockPos::new(3, 9, 6), Direction::South),
+            (air, BlockPos::new(3, 8, 5), Direction::Down),
+            (air, BlockPos::new(3, 10, 5), Direction::Up),
         ]
     );
 }

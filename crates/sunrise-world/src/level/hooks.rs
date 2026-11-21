@@ -84,8 +84,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.frosted_ice_melt(pos, state);
                     }
                 }
+                // FallingBlock.neighborChanged: look again two ticks on.
+                Class::FallingBlock => {
+                    self.schedule_tick(pos, block, 2);
+                }
                 Class::Hopper => self.hopper_check_powered(pos, state),
-                Class::Liquid => self.liquid_block_changed(pos, state),
+                Class::Liquid => self.liquid_block_neighbor_changed(pos, state),
                 Class::Note => self.note_neighbor_changed(pos, state),
                 Class::PistonBase => self.piston_check_if_extend(pos, state),
                 Class::PistonHead => {
@@ -161,13 +165,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.coral_try_schedule_die_tick(state, pos)
                 }
                 Class::Diode => self.diode_update_neighbors_in_front(pos, state),
+                // FallingBlock.onAdded: the check two ticks on.
                 Class::FallingBlock => {
-                    let delay = if b.data(state).is(Class::DragonEgg) {
-                        5
-                    } else {
-                        2
-                    };
-                    self.schedule_tick(pos, block, delay);
+                    self.schedule_tick(pos, block, 2);
                 }
                 Class::Frogspawn => {
                     let delay = self.random().next_int_between(3600, 12000).unwrap_or(3600);
@@ -193,7 +193,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.schedule_tick(pos, block, 8);
                     }
                 }
-                Class::Liquid => self.liquid_block_changed(pos, state),
+                Class::Liquid => self.liquid_block_added(pos, state),
                 Class::PistonBase => {
                     if !same && self.moving_piston(pos).is_none() {
                         self.piston_check_if_extend(pos, state);
