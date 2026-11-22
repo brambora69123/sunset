@@ -262,16 +262,22 @@ fn era_texture() -> Option<(u64, [f32; 4])> {
 
 /// Textures per side of the era's `clouds.png`.
 const ERA_CLOUD_TEXELS: f32 = 256.0;
-/// `renderFancyClouds`'s group: 8 cloud cells, each 12 blocks.
-const ERA_GROUP: f32 = 96.0;
+/// `var4`: a cloud cell, and the group of `var24` of them that `renderFancyClouds` builds.
+const ERA_CELL: f32 = 12.0;
+const ERA_CELLS: usize = 8;
+const ERA_GROUP: f32 = ERA_CELL * ERA_CELLS as f32;
+/// `var5`: the cell's height.
+const ERA_THICKNESS: f32 = 4.0;
+/// `var26`: the lift that keeps the top face below the cell's height.
+const ERA_EPS: f32 = 9.765_625e-4;
 
 /// The 1.7.10 cloud uniform: `renderFancyClouds`'s fractional shift of the patch inside the
 /// camera's cell (`-var22 * 12`, `-var23 * 12`), the layer's bottom (`var12`), and the four
 /// face shades times the cloud colour (alpha 0.8).
 fn era_state(input: &Input<'_>, generation: u64) -> (MeshKey, Uniform) {
     let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
-    let x = (input.camera.x + drift) / 12.0;
-    let z = input.camera.z / 12.0 + 0.33;
+    let x = (input.camera.x + drift) / f64::from(ERA_CELL);
+    let z = input.camera.z / f64::from(ERA_CELL) + 0.33;
     let cell_x = x.floor() as i64;
     let cell_z = z.floor() as i64;
     let bottom = (f64::from(input.height) - input.camera.y + 0.33) as f32;
@@ -284,9 +290,9 @@ fn era_state(input: &Input<'_>, generation: u64) -> (MeshKey, Uniform) {
         [0.0, bottom, 0.0, 0.0]
     } else {
         [
-            -((x - cell_x as f64) * 12.0) as f32,
+            -((x - cell_x as f64) * f64::from(ERA_CELL)) as f32,
             bottom,
-            -((z - cell_z as f64) * 12.0) as f32,
+            -((z - cell_z as f64) * f64::from(ERA_CELL)) as f32,
             0.0,
         ]
     };
@@ -332,130 +338,132 @@ fn push_quad_uvs(
     }
 }
 
-/// `renderFancyClouds`: eight 96-block groups around the camera, each a 96x96x4 cell drawn as
+/// `renderFancyClouds`: eight 96-block groups around the camera, each a 96x96x4 group drawn as
 /// its top and bottom and eight 12-block slices through each horizontal axis. The slices are
-/// the era's own look: each carries one texel column of the cell's 8x8 texture.
+/// the era's own look: each carries one texel column of the group's 8x8 texture.
+///
+/// Vanilla draws the clouds with `glDisable(GL_CULL_FACE)` and repeats `clouds.png` over the
+/// group, so every face is emitted with both windings (the cloud pipeline culls, so exactly one
+/// of the two survives each pixel) and split where the sheet repeats ([`era_quad`]). The mesh is
+/// layer-relative in y (`0..4`) and camera-relative in x/z: the uniform adds the layer's bottom
+/// and the camera's place in its cell.
 fn era_fancy(
     vertices: &mut Vec<crate::mesher::Vertex>,
     input: &Input<'_>,
     uv: [f32; 4],
     bottom: f32,
 ) {
-    const EPS: f32 = 9.765_625e-4;
     let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
-    let x = (input.camera.x + drift) / 12.0;
-    let z = input.camera.z / 12.0 + 0.33;
+    let x = (input.camera.x + drift) / f64::from(ERA_CELL);
+    let z = input.camera.z / f64::from(ERA_CELL) + 0.33;
     let cell_x = x.floor() as i64;
     let cell_z = z.floor() as i64;
-    // The mesh is camera-relative in x/z but layer-relative in y: the uniform
-    // adds the layer's world height (`hz_v_pos + hz_cloud_offset.xyz`), so the
-    // quads sit at 0..4 here. `bottom` only decides which faces exist.
-    let top = 4.0 - EPS;
-    // The cell's texel block in the 256x256 sheet, wrapped the way the sheet repeats.
-    let texel = |cell: i64, offset: i64| (cell + offset).rem_euclid(256) as f32;
+    // `var26`: the top face sits this far below the cell's height, so an inside camera sees
+    // the top and the bottom as separate surfaces.
+    let top = ERA_THICKNESS - ERA_EPS;
     for dz in -3..=4 {
         for dx in -3..=4 {
             let x0 = dx as f32 * ERA_GROUP;
             let z0 = dz as f32 * ERA_GROUP;
             let (x1, z1) = (x0 + ERA_GROUP, z0 + ERA_GROUP);
-            let tu = texel(cell_x, dx * 8);
-            let tv = texel(cell_z, dz * 8);
+            // The group's 8x8 texel block in the sheet, unwrapped: vanilla's `var30`/`var31`
+            // grow with the cell index and its `GL_REPEAT` wraps them.
+            let tu = (cell_x + dx as i64 * ERA_CELLS as i64) as f32;
+            let tv = (cell_z + dz as i64 * ERA_CELLS as i64) as f32;
+            // The group's 8x8 texels, `u` along x and `v` along z.
+            let texels = ((tu, tu + ERA_CELLS as f32), (tv, tv + ERA_CELLS as f32));
             // Top: `if (var12 <= var5 + 1.0F)`; bottom: `if (var12 > -var5 - 1.0F)`.
             if bottom <= 5.0 {
-                push_quad_uvs(
+                era_quad(
                     vertices,
+                    uv,
                     [[x0, top, z1], [x1, top, z1], [x1, top, z0], [x0, top, z0]],
+                    texels,
                     0,
                     [0, 127, 0, 0],
-                    [
-                        era_uv(uv, tu, tv + 8.0),
-                        era_uv(uv, tu + 8.0, tv + 8.0),
-                        era_uv(uv, tu + 8.0, tv),
-                        era_uv(uv, tu, tv),
-                    ],
                 );
             }
             if bottom > -5.0 {
-                push_quad_uvs(
+                era_quad(
                     vertices,
+                    uv,
                     [[x0, 0.0, z0], [x1, 0.0, z0], [x1, 0.0, z1], [x0, 0.0, z1]],
+                    texels,
                     1,
                     [0, -127, 0, 0],
-                    [
-                        era_uv(uv, tu, tv),
-                        era_uv(uv, tu + 8.0, tv),
-                        era_uv(uv, tu + 8.0, tv + 8.0),
-                        era_uv(uv, tu, tv + 8.0),
-                    ],
                 );
             }
             // West and east: eight slices at every 12-block boundary, each sampling one texel
-            // column and 24 rows over the 4-block height.
-            for k in 0..8 {
+            // column and its 8 rows over the 4-block height.
+            for k in 0..ERA_CELLS {
+                // `(var30 + var34 + 0.5) * var41`: one texel column, half a texel in.
                 let u = tu + k as f32 + 0.5;
+                let rows = ((u, u), (tv, tv + ERA_CELLS as f32));
                 if dx > -1 {
-                    let x = x0 + k as f32 * 12.0;
-                    for (v0, v1, y0, y1) in era_side_rows(tv) {
-                        push_quad_uvs(
-                            vertices,
-                            [[x, y0, z1], [x, y1, z1], [x, y1, z0], [x, y0, z0]],
-                            3,
-                            [-127, 0, 0, 0],
-                            [
-                                era_uv(uv, u, v0),
-                                era_uv(uv, u, v1),
-                                era_uv(uv, u, v1),
-                                era_uv(uv, u, v0),
-                            ],
-                        );
-                    }
+                    let x = x0 + k as f32 * ERA_CELL;
+                    era_quad(
+                        vertices,
+                        uv,
+                        [
+                            [x, 0.0, z0],
+                            [x, 0.0, z1],
+                            [x, ERA_THICKNESS, z1],
+                            [x, ERA_THICKNESS, z0],
+                        ],
+                        rows,
+                        3,
+                        [-127, 0, 0, 0],
+                    );
                 }
                 if dx <= 1 {
-                    let x = x1 - EPS - k as f32 * 12.0;
-                    for (v0, v1, y0, y1) in era_side_rows(tv) {
-                        push_quad_uvs(
-                            vertices,
-                            [[x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1]],
-                            3,
-                            [127, 0, 0, 0],
-                            [
-                                era_uv(uv, u, v0),
-                                era_uv(uv, u, v1),
-                                era_uv(uv, u, v1),
-                                era_uv(uv, u, v0),
-                            ],
-                        );
-                    }
-                }
-                let v = tv + k as f32 + 0.5;
-                if dz > -1 {
-                    let z = z0 + k as f32 * 12.0;
-                    push_quad_uvs(
+                    let x = x1 - ERA_EPS - k as f32 * ERA_CELL;
+                    era_quad(
                         vertices,
-                        [[x0, top, z], [x1, top, z], [x1, 0.0, z], [x0, 0.0, z]],
+                        uv,
+                        [
+                            [x, 0.0, z1],
+                            [x, 0.0, z0],
+                            [x, ERA_THICKNESS, z0],
+                            [x, ERA_THICKNESS, z1],
+                        ],
+                        rows,
+                        3,
+                        [127, 0, 0, 0],
+                    );
+                }
+                // `(var31 + var44 + 0.5) * var41`: one texel row, half a texel in.
+                let v = tv + k as f32 + 0.5;
+                let columns = ((tu, tu + ERA_CELLS as f32), (v, v));
+                if dz > -1 {
+                    let z = z0 + k as f32 * ERA_CELL;
+                    era_quad(
+                        vertices,
+                        uv,
+                        [
+                            [x0, 0.0, z],
+                            [x1, 0.0, z],
+                            [x1, ERA_THICKNESS, z],
+                            [x0, ERA_THICKNESS, z],
+                        ],
+                        columns,
                         2,
                         [0, 0, -127, 0],
-                        [
-                            era_uv(uv, tu, v),
-                            era_uv(uv, tu + 8.0, v),
-                            era_uv(uv, tu + 8.0, v),
-                            era_uv(uv, tu, v),
-                        ],
                     );
                 }
                 if dz <= 1 {
-                    let z = z1 - EPS - k as f32 * 12.0;
-                    push_quad_uvs(
+                    let z = z1 - ERA_EPS - k as f32 * ERA_CELL;
+                    era_quad(
                         vertices,
-                        [[x0, 0.0, z], [x1, 0.0, z], [x1, top, z], [x0, top, z]],
+                        uv,
+                        [
+                            [x1, 0.0, z],
+                            [x0, 0.0, z],
+                            [x0, ERA_THICKNESS, z],
+                            [x1, ERA_THICKNESS, z],
+                        ],
+                        columns,
                         2,
                         [0, 0, 127, 0],
-                        [
-                            era_uv(uv, tu, v),
-                            era_uv(uv, tu + 8.0, v),
-                            era_uv(uv, tu + 8.0, v),
-                            era_uv(uv, tu, v),
-                        ],
                     );
                 }
             }
@@ -463,32 +471,77 @@ fn era_fancy(
     }
 }
 
-/// `renderFancyClouds`'s side v coordinates: `[texel, texel + 24]` over the 4-block height,
-/// split where the sheet repeats so no quad leaves the atlas rect.
-fn era_side_rows(base: f32) -> Vec<(f32, f32, f32, f32)> {
+/// One face of a group: `corners` are its positions at `(s, t)` = `(0, 0)`, `(1, 0)`, `(1, 1)`
+/// and `(0, 1)`, and the texel ranges run along `s` (`u`) and `t` (`v`) — a range that does not
+/// move carries a spatial extent without a texture, such as the 96 blocks a side slice spans.
+/// The face is cut where the texel range crosses the sheet's edge, as vanilla's `GL_REPEAT`
+/// continues into the next copy but the atlas holds one, and each piece is emitted with both
+/// windings: the era draws clouds with culling off, and the cloud pipeline drops the back one.
+fn era_quad(
+    vertices: &mut Vec<crate::mesher::Vertex>,
+    uv: [f32; 4],
+    corners: [[f32; 3]; 4],
+    ((u0, u1), (v0, v1)): ((f32, f32), (f32, f32)),
+    shade: u32,
+    normal: [i8; 4],
+) {
+    let at = |s: f32, t: f32| {
+        let near = lerp3(corners[0], corners[1], s);
+        let far = lerp3(corners[3], corners[2], s);
+        lerp3(near, far, t)
+    };
+    for (s0, s1, u_from, u_to) in era_axis(u0, u1) {
+        for (t0, t1, v_from, v_to) in era_axis(v0, v1) {
+            let p = [at(s0, t0), at(s1, t0), at(s1, t1), at(s0, t1)];
+            let texels = [
+                era_uv(uv, u_from, v_from),
+                era_uv(uv, u_to, v_from),
+                era_uv(uv, u_to, v_to),
+                era_uv(uv, u_from, v_to),
+            ];
+            push_quad_uvs(vertices, p, shade, normal, texels);
+            let mut back = p;
+            back.reverse();
+            let mut back_uvs = texels;
+            back_uvs.reverse();
+            push_quad_uvs(vertices, back, shade, normal.map(|c| -c), back_uvs);
+        }
+    }
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
+}
+
+/// The pieces of one axis: `(s from, s to, texel from, texel to)`, the texels in `0..256` of
+/// one copy of the sheet. A range that does not move (a side slice samples one texel column)
+/// covers the whole axis with that texel.
+fn era_axis(ta: f32, tb: f32) -> Vec<(f32, f32, f32, f32)> {
+    let wrap = |t: f32| t.rem_euclid(ERA_CLOUD_TEXELS);
+    if tb <= ta {
+        let texel = wrap(ta);
+        return vec![(0.0, 1.0, texel, texel)];
+    }
+    let slope = tb - ta;
     let mut out = Vec::new();
-    let mut left = 24.0f32;
-    let mut texel = base;
-    let mut done = 0.0f32;
-    while left > 0.0 {
-        let take = left.min(256.0 - texel);
-        let (y0, y1) = (done / 24.0 * 4.0, (done + take) / 24.0 * 4.0);
-        out.push((texel, texel + take, y0, y1));
-        done += take;
-        left -= take;
-        texel = (texel + take).rem_euclid(256.0);
+    let (mut from, mut texel) = (ta, wrap(ta));
+    loop {
+        // The next place this copy of the sheet ends, in texels and along the axis.
+        let take = (tb - from).min(ERA_CLOUD_TEXELS - texel);
+        let to = from + take;
+        let end = texel + take;
+        out.push(((from - ta) / slope, (to - ta) / slope, texel, end));
+        if to >= tb {
+            break;
+        }
+        (from, texel) = (to, 0.0);
     }
     out
 }
 
 /// `renderClouds`'s fast path: one 512x512 plane at the cloud height, textured at 2048 blocks
 /// per repeat and drifting with the camera (`var20`, `var21`).
-fn era_fast(
-    vertices: &mut Vec<crate::mesher::Vertex>,
-    input: &Input<'_>,
-    uv: [f32; 4],
-    bottom: f32,
-) {
+fn era_fast(vertices: &mut Vec<crate::mesher::Vertex>, input: &Input<'_>, uv: [f32; 4]) {
     let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
     let mut x = input.camera.x + drift;
     let mut z = input.camera.z;
@@ -509,7 +562,6 @@ fn era_fast(
                     [z0, z1],
                     [(z0 + z as f32) / 2048.0, (z1 + z as f32) / 2048.0],
                 ),
-                0.0,
                 uv,
             );
         }
@@ -522,44 +574,21 @@ fn era_wrapped_plane(
     vertices: &mut Vec<crate::mesher::Vertex>,
     (x, u): ([f32; 2], [f32; 2]),
     (z, v): ([f32; 2], [f32; 2]),
-    y: f32,
     uv: [f32; 4],
 ) {
-    // A world range and its linearly rising texture coordinates, cut at every integer
-    // coordinate so each piece stays inside one repeat: (from, to, first fraction, last).
-    fn splits([a, b]: [f32; 2], [ta, tb]: [f32; 2]) -> Vec<(f32, f32, f32, f32)> {
-        let slope = (tb - ta) / (b - a);
-        let mut cuts = Vec::new();
-        for k in (ta.floor() as i32 + 1)..=(tb.ceil() as i32 - 1) {
-            let at = a + (k as f32 - ta) / slope;
-            if at > a && at < b {
-                cuts.push((at, k as f32));
-            }
-        }
-        cuts.push((b, tb));
-        let mut out = Vec::new();
-        let (mut from, mut t_from) = (a, ta);
-        for (to, t_to) in cuts {
-            let lo = t_from - t_from.floor();
-            let hi = t_to - t_to.floor();
-            out.push((from, to, lo, if hi == 0.0 { 1.0 } else { hi }));
-            from = to;
-            t_from = t_to;
-        }
-        out
-    }
-    let us = splits(x, u);
-    let vs = splits(z, v);
-    for &(xa, xb, ua, ub) in &us {
-        for &(za, zb, va, vb) in &vs {
-            let texel = |t: f32| t * 256.0;
+    let us = era_axis(u[0] * 256.0, u[1] * 256.0);
+    let vs = era_axis(v[0] * 256.0, v[1] * 256.0);
+    for &(sa, sb, ua, ub) in &us {
+        for &(ta, tb, va, vb) in &vs {
+            let (xa, xb) = (x[0] + (x[1] - x[0]) * sa, x[0] + (x[1] - x[0]) * sb);
+            let (za, zb) = (z[0] + (z[1] - z[0]) * ta, z[0] + (z[1] - z[0]) * tb);
             let uvs = [
-                era_uv(uv, texel(ua), texel(vb)),
-                era_uv(uv, texel(ub), texel(vb)),
-                era_uv(uv, texel(ub), texel(va)),
-                era_uv(uv, texel(ua), texel(va)),
+                era_uv(uv, ua, vb),
+                era_uv(uv, ub, vb),
+                era_uv(uv, ub, va),
+                era_uv(uv, ua, va),
             ];
-            let p = [[xa, y, zb], [xb, y, zb], [xb, y, za], [xa, y, za]];
+            let p = [[xa, 0.0, zb], [xb, 0.0, zb], [xb, 0.0, za], [xa, 0.0, za]];
             push_quad_uvs(vertices, p, 0, [0, 127, 0, 0], uvs);
             let mut q = p;
             let mut t = uvs;
@@ -705,7 +734,7 @@ impl Mesh {
             }
             self.vertices.clear();
             if input.fast {
-                era_fast(&mut self.vertices, input, uv, uniform.offset[1]);
+                era_fast(&mut self.vertices, input, uv);
             } else {
                 era_fancy(&mut self.vertices, input, uv, uniform.offset[1]);
             }
@@ -1228,27 +1257,50 @@ mod tests {
         }
     }
 
+    /// An atlas rect and a camera for the mesh tests: `uv` is the era sheet's sprite in a
+    /// 4096x5120 GUI atlas.
+    const ERA_UV: [f32; 4] = [0.6274414, 0.803125, 0.6899414, 0.853125];
+
+    fn era_vertices(input: &Input<'_>, fast: bool) -> (Vec<crate::mesher::Vertex>, Uniform) {
+        let (_, uniform) = era_state(input, 1);
+        let mut vertices = Vec::new();
+        if fast {
+            era_fast(&mut vertices, input, ERA_UV);
+        } else {
+            era_fancy(&mut vertices, input, ERA_UV, uniform.offset[1]);
+        }
+        (vertices, uniform)
+    }
+
+    fn bounds(vertices: &[crate::mesher::Vertex]) -> ([f32; 3], [f32; 3]) {
+        vertices
+            .iter()
+            .fold(([f32::MAX; 3], [f32::MIN; 3]), |(mut lo, mut hi), v| {
+                for i in 0..3 {
+                    lo[i] = lo[i].min(v.pos[i]);
+                    hi[i] = hi[i].max(v.pos[i]);
+                }
+                (lo, hi)
+            })
+    }
+
     /// `renderFancyClouds`: the layer's bottom is `getCloudHeight() - cameraY + 0.33` (128 -
     /// 70 + 0.33) and its top 4 blocks above, one group being 8 cells of 12 blocks.
     #[test]
     fn era_fancy_clouds_are_the_96_block_groups_at_y_128() {
         let texture = (256, 256, vec![true; 256 * 256]);
         let input = era_input(&texture);
-        let mut vertices = Vec::new();
-        era_fancy(&mut vertices, &input, [0.0, 0.0, 1.0, 1.0], 58.33);
+        let (vertices, uniform) = era_vertices(&input, false);
         assert!(!vertices.is_empty());
-        let ys = vertices.iter().map(|v| v.pos[1]);
-        let (min, max) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
-        // Layer-relative: the uniform's y places the layer at 58.33 above the camera.
-        assert!(min.abs() < 1e-4);
-        // The slices reach the layer's full 4 blocks; the top face sits 1/1024 below.
-        assert!(max <= 4.0 && max > 4.0 - 2e-3, "top face at {max}");
+        // The mesh is layer-relative: the uniform's y places the layer 58.33 above the camera.
+        assert_eq!(uniform.offset[1], 58.33);
+        let (lo, hi) = bounds(&vertices);
+        assert_eq!(lo[1], 0.0);
+        // The top face sits 1/1024 below the layer's 4-block height.
+        assert!(hi[1] <= 4.0 && hi[1] > 4.0 - 2e-3, "top face at {}", hi[1]);
         // Eight groups each way: from -3*96 to (4+1)*96, 768 blocks across.
-        let xs = vertices
-            .iter()
-            .map(|v| v.pos[0])
-            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
-        assert_eq!(xs, (-288.0, 480.0));
+        assert_eq!((lo[0], hi[0]), (-288.0, 480.0));
+        assert_eq!((lo[2], hi[2]), (-288.0, 480.0));
         // Every vertex samples inside the atlas rect.
         assert!(
             vertices
@@ -1257,20 +1309,161 @@ mod tests {
         );
     }
 
+    /// A group is 8 cells of 12 blocks and 1 texel a cell: its faces sample the sheet at 12
+    /// blocks a texel, and a side slice one texel column and 8 rows over the 4-block height.
+    #[test]
+    fn era_faces_sample_their_texel_block() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let input = era_input(&texture);
+        let (vertices, _) = era_vertices(&input, false);
+        // The camped layer hides its top faces (`bottom = 58.33`), so the first group's first
+        // face is its bottom, then the east and south slices at k = 0; each face is followed
+        // by its reversed twin.
+        let span = |i: usize| {
+            let quad = &vertices[i * 8..i * 8 + 4];
+            let axis = |axis: usize, f: fn(&crate::mesher::Vertex) -> f32| {
+                let (lo, hi) = quad.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| {
+                    (lo.min(f(v)), hi.max(f(v)))
+                });
+                (hi - lo) / (ERA_UV[axis + 2] - ERA_UV[axis]) * ERA_CLOUD_TEXELS
+            };
+            (axis(0, |v| v.uv[0]), axis(1, |v| v.uv[1]))
+        };
+        let texels = 8.0;
+        let (u, v) = span(0);
+        assert!(
+            (u - texels).abs() < 1e-3 && (v - texels).abs() < 1e-3,
+            "bottom {u} {v}"
+        );
+        // The east slice: one texel column (u), the group's 8 rows (v).
+        let (u, v) = span(1);
+        assert!(u.abs() < 1e-4 && (v - texels).abs() < 1e-3, "east {u} {v}");
+        // The south slice: the group's 8 columns (u), one texel row, half a texel in.
+        let (u, v) = span(2);
+        assert!((u - texels).abs() < 1e-3 && v.abs() < 1e-4, "south {u} {v}");
+    }
+
+    /// Vanilla draws the clouds with culling off (`glDisable(GL_CULL_FACE)`), and the cloud
+    /// pipeline culls back faces: every quad is emitted with both windings, so the layer is
+    /// drawn whether the camera is under it, inside it or over it, and no quad is degenerate.
+    #[test]
+    fn era_clouds_are_two_sided_and_never_degenerate() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        for (y, fast) in [
+            (70.0, false),
+            (127.5, false),
+            (129.0, false),
+            (200.0, false),
+            (70.0, true),
+        ] {
+            let mut input = era_input(&texture);
+            input.fast = fast;
+            input.camera.y = y;
+            let (vertices, _) = era_vertices(&input, fast);
+            assert!(!vertices.is_empty(), "no mesh at y {y}");
+            for (i, pair) in vertices.as_chunks::<8>().0.iter().enumerate() {
+                for quad in pair.as_chunks::<4>().0 {
+                    let p: Vec<glam::Vec3> =
+                        quad.iter().map(|v| glam::Vec3::from_array(v.pos)).collect();
+                    let area = (p[1] - p[0]).cross(p[2] - p[0]).length() / 2.0;
+                    assert!(area > 1e-3, "quad {i} at y {y} has area {area}");
+                }
+                // Every face is followed by the same face wound the other way, so the
+                // rasteriser keeps exactly one of the two at every pixel.
+                let (front, back) = pair.split_at(4);
+                assert_eq!(
+                    back.iter().map(|v| v.pos).collect::<Vec<_>>(),
+                    front.iter().rev().map(|v| v.pos).collect::<Vec<_>>(),
+                    "quad {i} at y {y} has no reversed twin"
+                );
+                assert_eq!(
+                    back.iter().map(|v| v.uv).collect::<Vec<_>>(),
+                    front.iter().rev().map(|v| v.uv).collect::<Vec<_>>()
+                );
+                assert_eq!(back[0].light, front[3].light);
+            }
+        }
+    }
+
+    /// The layer stays at the era's 128 (its bottom at `128.33` in world space) from any
+    /// camera: 60 (under it, so only its underside), 128 (inside its 4-block body, so both
+    /// surfaces) and 200 (over it, so only its top).
+    #[test]
+    fn era_layer_sits_at_the_era_height_whatever_the_camera() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let mut input = era_input(&texture);
+        for y in [60.0, 128.0, 200.0] {
+            input.camera.y = y;
+            let (vertices, uniform) = era_vertices(&input, false);
+            let bottom = 128.0 - y + 0.33;
+            assert_eq!(uniform.offset[1], bottom as f32);
+            // The mesh's y is layer-relative, so the camera plus the uniform places the
+            // layer's bottom at 128.33 and its top at 132.33 - EPS.
+            let world = |v: &crate::mesher::Vertex| y as f32 + v.pos[1] + uniform.offset[1];
+            let top = vertices.iter().filter(|v| v.light == 0).map(world);
+            let under = vertices.iter().filter(|v| v.light == 1).map(world);
+            // Top faces exist while the camera is at or below the layer's top (bottom <= 5),
+            // the underside while it is at or above the layer's bottom (bottom > -5).
+            assert_eq!(top.clone().count() > 0, bottom <= 5.0, "top faces at y {y}");
+            assert_eq!(
+                under.clone().count() > 0,
+                bottom > -5.0,
+                "under faces at y {y}"
+            );
+            for at in top {
+                assert!((at - (132.0 + 0.33 - 9.765625e-4)).abs() < 1e-3, "{at}");
+            }
+            for at in under {
+                assert!((at - (128.0 + 0.33)).abs() < 1e-3, "{at}");
+            }
+        }
+    }
+
+    /// Vanilla repeats `clouds.png` (`GL_REPEAT`); the GUI atlas holds one copy, so a face
+    /// whose texel block crosses the sheet's edge is cut there instead of sampling whatever
+    /// the atlas packs beside it.
+    #[test]
+    fn era_cloud_uvs_stay_inside_the_atlas_rect() {
+        let texture = (256, 256, vec![true; 256 * 256]);
+        let mut input = era_input(&texture);
+        let inside = |vertices: &[crate::mesher::Vertex]| {
+            let (lo, hi) =
+                vertices
+                    .iter()
+                    .fold(([f32::MAX; 2], [f32::MIN; 2]), |(mut lo, mut hi), v| {
+                        for i in 0..2 {
+                            lo[i] = lo[i].min(v.uv[i]);
+                            hi[i] = hi[i].max(v.uv[i]);
+                        }
+                        (lo, hi)
+                    });
+            assert!(lo[0] >= ERA_UV[0] && hi[0] <= ERA_UV[2], "u {lo:?}..{hi:?}");
+            assert!(lo[1] >= ERA_UV[1] && hi[1] <= ERA_UV[3], "v {lo:?}..{hi:?}");
+        };
+        // Cell 0, and cells whose 8-texel groups straddle the sheet's 256-texel edge.
+        for x in [0.0, 1.0, 3060.0, 3070.0] {
+            for z in [0.0, 3060.0] {
+                input.camera.x = x;
+                input.camera.z = z;
+                for fast in [false, true] {
+                    input.fast = fast;
+                    let (vertices, _) = era_vertices(&input, fast);
+                    inside(&vertices);
+                }
+            }
+        }
+    }
+
     /// The fast path is one 512x512 plane at the same height, sixteen 32-block cells each way.
     #[test]
     fn era_fast_clouds_are_the_512_block_plane() {
         let texture = (256, 256, vec![true; 256 * 256]);
         let mut input = era_input(&texture);
         input.fast = true;
-        let mut vertices = Vec::new();
-        era_fast(&mut vertices, &input, [0.0, 0.0, 1.0, 1.0], 58.33);
+        let (vertices, _) = era_vertices(&input, true);
         assert_eq!(vertices.len(), 16 * 16 * 4 * 2);
-        let xs = vertices
-            .iter()
-            .map(|v| v.pos[0])
-            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
-        assert_eq!(xs, (-256.0, 256.0));
+        let (lo, hi) = bounds(&vertices);
+        assert_eq!((lo[0], hi[0]), (-256.0, 256.0));
         assert!(vertices.iter().all(|v| v.pos[1] == 0.0));
         assert!(
             vertices
@@ -1294,14 +1487,17 @@ mod tests {
         assert_eq!(uniform.colors[3][3], 204.0 / 255.0);
     }
 
-    /// The side slices' v range wraps through the sheet in whole 8-texel rows.
+    /// A group's 8 texels are one piece inside a copy of the sheet and two across its edge,
+    /// and a side slice's single texel wraps to its place in the one copy the atlas holds.
     #[test]
-    fn era_side_rows_split_where_the_sheet_wraps() {
-        assert_eq!(era_side_rows(0.0), vec![(0.0, 24.0, 0.0, 4.0)]);
-        let wrapped = era_side_rows(248.0);
+    fn era_axis_splits_where_the_sheet_wraps() {
+        assert_eq!(era_axis(0.0, 8.0), vec![(0.0, 1.0, 0.0, 8.0)]);
         assert_eq!(
-            wrapped,
-            vec![(248.0, 256.0, 0.0, 4.0 / 3.0), (0.0, 16.0, 4.0 / 3.0, 4.0)]
+            era_axis(250.0, 258.0),
+            vec![(0.0, 6.0 / 8.0, 250.0, 256.0), (6.0 / 8.0, 1.0, 0.0, 2.0)]
         );
+        // A side slice samples one texel column: the whole 96 blocks keep that texel.
+        assert_eq!(era_axis(262.5, 262.5), vec![(0.0, 1.0, 6.5, 6.5)]);
+        assert_eq!(era_axis(-1.5, -1.5), vec![(0.0, 1.0, 254.5, 254.5)]);
     }
 }
