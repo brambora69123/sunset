@@ -107,6 +107,7 @@ pub use block_maps::BlockMaps;
 pub mod classes;
 pub mod data;
 pub(crate) mod era;
+pub mod era_drops;
 pub mod states;
 pub mod ticks;
 
