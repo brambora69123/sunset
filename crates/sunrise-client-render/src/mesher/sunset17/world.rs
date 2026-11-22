@@ -5,6 +5,7 @@
 
 use super::State17;
 use super::blocks::{BlockDef, Tint};
+use super::render::DoublePlantSprites;
 
 /// `WorldView`: what the block renderer reads from the world.
 pub trait WorldView {
@@ -33,6 +34,12 @@ pub trait WorldView {
     /// The era's `Biome.getGrassColor`/`getFoliageColor` at a block: the 3x3
     /// average of the biome colours of the nine columns around it.
     fn biome_tint(&self, tint: Tint, x: i32, y: i32, z: i32) -> i32;
+
+    /// `DoublePlantBlock`'s sprites: the block's own state cannot name the
+    /// upper half's texture, which follows the variant the lower half stores.
+    fn double_plant_sprites(&self) -> Option<&DoublePlantSprites> {
+        None
+    }
 
     /// `World.getLightColor(x, y, z, blockLight)`: `sky << 20 | max(block,
     /// blockLight) << 4`, with `World.getBrightness`'s neighbour-light

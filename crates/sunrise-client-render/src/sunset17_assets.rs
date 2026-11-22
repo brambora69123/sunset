@@ -527,6 +527,87 @@ mod tests {
         assert!(steps > 2, "a slab is a half block, not a cube");
     }
 
+    /// 1.7.10's selection outline is the block's `setShape` box, which the era
+    /// decorations still have where their collision shape is null: tall grass
+    /// outlines as a 0.8-tall, 0.8-wide box that hugs the plant, not as a
+    /// full cell whose top edge floats above it.
+    #[test]
+    fn the_era_crossed_plants_outline_their_set_shape_box() {
+        let Some(root) = root() else { return };
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let collisions = crate::collisions::load_1_7_10(&root, assets.registry).unwrap();
+        let cached = collisions.cached_shapes();
+        let outline = |name: &str| {
+            let state = assets.registry.default_state(name).unwrap();
+            cached
+                .context_outline_shape(
+                    state,
+                    sunrise_world::collision_context::EntityContextKind::Player,
+                )
+                .cloned()
+        };
+        let bounds = |shape: &sunrise_core::geometry::VoxelShape| {
+            let bounds = shape.bounds().expect("a non-empty shape");
+            [
+                bounds.min(sunrise_core::geometry::Axis::X),
+                bounds.min(sunrise_core::geometry::Axis::Y),
+                bounds.min(sunrise_core::geometry::Axis::Z),
+                bounds.max(sunrise_core::geometry::Axis::X),
+                bounds.max(sunrise_core::geometry::Axis::Y),
+                bounds.max(sunrise_core::geometry::Axis::Z),
+            ]
+        };
+        // `TallPlantBlock`'s constructor: 0.5 +- 0.4, 0.8 tall.
+        let tallgrass = outline("minecraft:tallgrass").expect("tall grass has an outline");
+        assert_eq!(
+            bounds(&tallgrass),
+            [
+                f64::from(0.1_f32),
+                0.0,
+                f64::from(0.1_f32),
+                f64::from(0.9_f32),
+                f64::from(0.8_f32),
+                f64::from(0.9_f32),
+            ]
+        );
+        // `FlowerBlock` keeps `PlantBlock`'s 0.2 inset and 0.6 height.
+        let flower = outline("minecraft:yellow_flower").expect("a flower has an outline");
+        assert_eq!(
+            bounds(&flower),
+            [
+                f64::from(0.3_f32),
+                0.0,
+                f64::from(0.3_f32),
+                f64::from(0.7_f32),
+                f64::from(0.6_f32),
+                f64::from(0.7_f32),
+            ]
+        );
+        // `DoublePlantBlock.updateShape` is the full cube, so no row is needed
+        // and the client's default cube stays.
+        assert!(outline("minecraft:double_plant").is_none());
+    }
+
+    /// The era table serialises each shape's occupied cells: a slab is the
+    /// bottom half, not the full cube an all-ones mask would make it.
+    #[test]
+    fn the_era_table_keeps_a_shapes_occupancy() {
+        let Some(root) = root() else { return };
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let collisions = crate::collisions::load_1_7_10(&root, assets.registry).unwrap();
+        let slab = assets
+            .registry
+            .default_state("minecraft:stone_slab")
+            .unwrap();
+        let shape = collisions
+            .static_shape(slab)
+            .unwrap()
+            .expect("a state with a static shape");
+        let bounds = shape.bounds().expect("a slab has a box");
+        assert_eq!(bounds.max(sunrise_core::geometry::Axis::Y), 0.5);
+        assert_eq!(bounds.max(sunrise_core::geometry::Axis::X), 1.0);
+    }
+
     #[test]
     fn the_era_collisions_stand_on_solid_blocks_and_not_on_water() {
         let Some(root) = root() else { return };

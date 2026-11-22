@@ -4,9 +4,10 @@
 //! Covers the render-type dispatch, the standard cube path with per-face
 //! textures, tint and the three lighting modes (off, smooth, weighted), the
 //! six face tessellators with UV rotation, axis blocks (logs), glass, torches,
-//! crossed squares (plants), crops, liquids, stairs, fences, cacti, lily pads
-//! and snow layers. Its block facts, sprites and light come from the era's own
-//! tables ([`super::State17`], `sunset17_assets`, [`super::Colormaps`]).
+//! crossed squares (plants, double plants and the sunflower's face), crops,
+//! liquids, stairs, fences, cacti, lily pads and snow layers. Its block facts,
+//! sprites and light come from the era's own tables ([`super::State17`],
+//! `sunset17_assets`, [`super::Colormaps`]).
 //!
 //! The vertex stream is checked against the real 1.7.10 client by the engine's
 //! `sunset17_render_probe` bin and `tools/javaoracle_1_7_10/RenderOracle.java`
@@ -32,6 +33,45 @@ pub struct RenderOptions {
     pub fancy_graphics: bool,
     /// `GameRenderer.anaglyph`.
     pub anaglyph: bool,
+}
+
+/// `DoublePlantBlock.TEXTURES`: the variant names of the block's sprites, in
+/// metadata order.
+const DOUBLE_PLANT_VARIANTS: [&str; 6] =
+    ["sunflower", "syringa", "grass", "fern", "rose", "paeonia"];
+
+/// `DoublePlantBlock`'s sprites. The block's own state cannot carry them: the
+/// half's sprite depends on the variant the lower half stores, which the upper
+/// half's metadata does not include, and the sunflower adds a face cross.
+#[derive(Clone, Copy, Debug)]
+pub struct DoublePlantSprites {
+    /// `bottomSprites`, by variant.
+    pub bottom: [Sprite; 6],
+    /// `topSprites`, by variant.
+    pub top: [Sprite; 6],
+    /// `sunflowerSprite`: the face cross's front and back.
+    pub sunflower: [Sprite; 2],
+}
+
+impl DoublePlantSprites {
+    /// The sprites of every variant from an atlas' `minecraft:blocks/...`
+    /// layer table; a missing texture is layer 0.
+    pub fn from_layers(layers: &std::collections::BTreeMap<String, u32>) -> DoublePlantSprites {
+        let sprite = |name: &str| {
+            let key = format!("minecraft:blocks/double_plant_{name}");
+            Sprite::unit(layers.get(&key).copied().unwrap_or(0) as u16)
+        };
+        let by_variant = |half: &str| {
+            std::array::from_fn(|variant| {
+                sprite(&format!("{}_{half}", DOUBLE_PLANT_VARIANTS[variant]))
+            })
+        };
+        DoublePlantSprites {
+            bottom: by_variant("bottom"),
+            top: by_variant("top"),
+            sunflower: [sprite("sunflower_front"), sprite("sunflower_back")],
+        }
+    }
 }
 
 /// `RenderBlocks`. One instance renders one world.
@@ -217,6 +257,7 @@ impl<'w, W: WorldView> RenderBlocks<'w, W> {
             Kind::Log => self.tesselate_axis(block, x, y, z),
             Kind::Quartz => self.tesselate_quartz(block, x, y, z),
             Kind::Cross(_) => self.tesselate_cross(block, x, y, z),
+            Kind::DoublePlant => self.tesselate_double_plant(block, x, y, z),
             Kind::Plant => self.tesselate_plant(block, x, y, z),
             Kind::Torch => self.tesselate_torch(block, x, y, z),
             Kind::Liquid(_) => self.tesselate_liquid(block, x, y, z),
@@ -1953,7 +1994,7 @@ impl<'w, W: WorldView> RenderBlocks<'w, W> {
     // Crossed squares ---------------------------------------------------
 
     /// The 3129871/116129781/42317861 hash of `tesselateCross`: the same
-    /// formula vanilla applies to tallgrass, flowers and double plants.
+    /// formula vanilla applies to tallgrass and flowers.
     pub fn cross_offset(x: i32, y: i32, z: i32) -> i64 {
         // `x * 3129871` is an int multiply in vanilla, then widened to long.
         let mut hash =
@@ -1965,8 +2006,129 @@ impl<'w, W: WorldView> RenderBlocks<'w, W> {
         hash
     }
 
+    /// The same hash for `tesselateDoublePlant`, which has no y term: both
+    /// halves of a plant share the column's offset and stay aligned.
+    pub fn double_plant_offset(x: i32, z: i32) -> i64 {
+        let mut hash = (x.wrapping_mul(3129871) as i64) ^ (z as i64).wrapping_mul(116129781);
+        hash = hash
+            .wrapping_mul(hash)
+            .wrapping_mul(42317861)
+            .wrapping_add(hash.wrapping_mul(11));
+        hash
+    }
+
+    /// One nibble of the column hash as `(float)(hash >> shift & 15L) / 15.0F`,
+    /// widened to double: vanilla subtracts a double literal next, so the rest
+    /// of the offset is double arithmetic.
+    fn hash_unit(hash: i64, shift: u32) -> f64 {
+        f64::from((hash >> shift & 15) as f32 / 15.0)
+    }
+
     /// `tesselateCross(Block, x, y, z)`.
     fn tesselate_cross(&mut self, block: &BlockDef, x: i32, y: i32, z: i32) -> bool {
+        self.plant_color(block, x, y, z);
+
+        let mut px = x as f64;
+        let mut py = y as f64;
+        let mut pz = z as f64;
+        match block.kind {
+            Kind::Cross(CrossKind::TallGrass) => {
+                let hash = Self::cross_offset(x, y, z);
+                px += (Self::hash_unit(hash, 16) - 0.5) * 0.5;
+                py += (Self::hash_unit(hash, 20) - 1.0) * 0.2;
+                pz += (Self::hash_unit(hash, 24) - 0.5) * 0.5;
+            }
+            Kind::Cross(CrossKind::Flower) => {
+                let hash = Self::cross_offset(x, y, z);
+                px += (Self::hash_unit(hash, 16) - 0.5) * 0.3;
+                pz += (Self::hash_unit(hash, 24) - 0.5) * 0.3;
+            }
+            _ => {}
+        }
+
+        let sprite = self.sprite_for(block, x, y, z, 0);
+        self.tesselate_cross_sprite(sprite, px, py, pz, 1.0);
+        true
+    }
+
+    /// `tesselateDoublePlant`: one cross per half, both at the same column
+    /// hash offset (the hash has no y term, so the halves stay aligned). The
+    /// variant comes from the lower half, whose metadata the upper half does
+    /// not carry; an upper half without its lower half draws nothing.
+    fn tesselate_double_plant(&mut self, block: &BlockDef, x: i32, y: i32, z: i32) -> bool {
+        self.plant_color(block, x, y, z);
+        let hash = Self::double_plant_offset(x, z);
+        let px = x as f64 + (Self::hash_unit(hash, 16) - 0.5) * 0.3;
+        let py = y as f64;
+        let pz = z as f64 + (Self::hash_unit(hash, 24) - 0.5) * 0.3;
+        let meta = self.world.metadata(x, y, z) as u8;
+        // `isBottomHalf` is vanilla's name for the *upper* half (metadata bit 8),
+        // the one that reads the variant from the block below.
+        let upper = meta & 8 != 0;
+        if upper && self.world.block(x, y - 1, z).kind != Kind::DoublePlant {
+            return false;
+        }
+        let variant = usize::from(if upper {
+            self.world.metadata(x, y - 1, z) as u8 & 7
+        } else {
+            meta & 7
+        })
+        .min(5);
+        let Some(sprites) = self.world.double_plant_sprites().copied() else {
+            return false;
+        };
+        let sprite = if upper {
+            sprites.top[variant]
+        } else {
+            sprites.bottom[variant]
+        };
+        self.tesselate_cross_sprite(sprite, px, py, pz, 1.0);
+        if upper && variant == 0 {
+            self.tesselate_sunflower_face(px, py, pz, hash, &sprites);
+        }
+        true
+    }
+
+    /// The sunflower's face cross: `sunflowerSprite[0]` on the front and `[1]`
+    /// on the back, tilted by `cos(hash * 0.8)`, drawn on the upper half only.
+    fn tesselate_sunflower_face(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        hash: i64,
+        sprites: &DoublePlantSprites,
+    ) {
+        let angle = sunrise_core::jmath::cos(hash as f64 * 0.8) * std::f64::consts::PI * 0.1;
+        let cos = sunrise_core::jmath::cos(angle);
+        let sin = sunrise_core::jmath::sin(angle);
+        // `var41`..`var55` of `tesselateDoublePlant`.
+        let a = 0.5 + 0.3 * cos - 0.5 * sin;
+        let b = 0.5 + 0.5 * cos + 0.3 * sin;
+        let c = 0.5 + 0.3 * cos + 0.5 * sin;
+        let d = 0.5 + -0.5 * cos + 0.3 * sin;
+        let e = 0.5 + -0.05 * cos + 0.5 * sin;
+        let f = 0.5 + -0.5 * cos + -0.05 * sin;
+        let g = 0.5 + -0.05 * cos - 0.5 * sin;
+        let h = 0.5 + 0.5 * cos + -0.05 * sin;
+        let [front, back] = sprites.sunflower;
+        let t = &mut self.tesselator;
+        t.layer(front.layer);
+        t.vertex(x + e, y + 1.0, z + f, front.u_min(), front.v_max());
+        t.vertex(x + g, y + 1.0, z + h, front.u_max(), front.v_max());
+        t.vertex(x + a, y, z + b, front.u_max(), front.v_min());
+        t.vertex(x + c, y, z + d, front.u_min(), front.v_min());
+        t.layer(back.layer);
+        t.vertex(x + g, y + 1.0, z + h, back.u_min(), back.v_max());
+        t.vertex(x + e, y + 1.0, z + f, back.u_max(), back.v_max());
+        t.vertex(x + c, y, z + d, back.u_max(), back.v_min());
+        t.vertex(x + a, y, z + b, back.u_min(), back.v_min());
+    }
+
+    /// `tesselateCross`'s and `tesselateDoublePlant`'s prefix: the brightness
+    /// of the block's sampled light and `getColor`'s multiplier, with the
+    /// anaglyph swap.
+    fn plant_color(&mut self, block: &BlockDef, x: i32, y: i32, z: i32) {
         self.tesselator
             .brightness(block.light_color(self.world, x, y, z));
         let color = block.color(self.world.metadata(x, y, z) as u8, self.world, x, y, z);
@@ -1982,28 +2144,6 @@ impl<'w, W: WorldView> RenderBlocks<'w, W> {
             b = blue;
         }
         self.tesselator.color(r, g, b);
-
-        let mut px = x as f64;
-        let mut py = y as f64;
-        let mut pz = z as f64;
-        match block.kind {
-            Kind::Cross(CrossKind::TallGrass) => {
-                let hash = Self::cross_offset(x, y, z);
-                px += (((hash >> 16 & 15) as f32 / 15.0 - 0.5) * 0.5) as f64;
-                py += (((hash >> 20 & 15) as f32 / 15.0 - 1.0) * 0.2) as f64;
-                pz += (((hash >> 24 & 15) as f32 / 15.0 - 0.5) * 0.5) as f64;
-            }
-            Kind::Cross(CrossKind::Flower) => {
-                let hash = Self::cross_offset(x, y, z);
-                px += (((hash >> 16 & 15) as f32 / 15.0 - 0.5) * 0.3) as f64;
-                pz += (((hash >> 24 & 15) as f32 / 15.0 - 0.5) * 0.3) as f64;
-            }
-            _ => {}
-        }
-
-        let sprite = self.sprite_for(block, x, y, z, 0);
-        self.tesselate_cross_sprite(sprite, px, py, pz, 1.0);
-        true
     }
 
     /// `tesselateCross(Sprite, x, y, z, size)`.
@@ -2736,6 +2876,14 @@ mod tests {
     use crate::mesher::sunset17::fixture::{self, TestWorld};
 
     fn render(world: &TestWorld, at: [i32; 3], fancy: bool) -> usize {
+        render_vertices(world, at, fancy).len()
+    }
+
+    fn render_vertices(
+        world: &TestWorld,
+        at: [i32; 3],
+        fancy: bool,
+    ) -> Vec<super::super::tesselator::Vertex> {
         let [x, y, z] = at;
         let def = world.state(x, y, z).block;
         let mut renderer = RenderBlocks::new(
@@ -2747,7 +2895,95 @@ mod tests {
             },
         );
         assert!(renderer.tesselate_in_world(&def, x, y, z));
-        renderer.tesselator.vertices.len()
+        renderer.tesselator.vertices
+    }
+
+    /// The tall grass cross is one block tall: two quads 0.9 wide (the era's
+    /// 0.45 half-width), from the block's floor to its ceiling, moved by the
+    /// column hash. The 0.4 inset of `TallPlantBlock` is the block's shape, not
+    /// a second block of height.
+    #[test]
+    fn a_tall_grass_cross_is_one_block_tall() {
+        let mut world = TestWorld::new();
+        world.set(2, 6, 4, fixture::id("tallgrass") as u8, 1);
+        let vertices = render_vertices(&world, [2, 6, 4], false);
+        assert_eq!(vertices.len(), 16);
+        let hash = RenderBlocks::<TestWorld>::cross_offset(2, 6, 4);
+        let px = 2.0 + (RenderBlocks::<TestWorld>::hash_unit(hash, 16) - 0.5) * 0.5;
+        let py = 6.0 + (RenderBlocks::<TestWorld>::hash_unit(hash, 20) - 1.0) * 0.2;
+        let pz = 4.0 + (RenderBlocks::<TestWorld>::hash_unit(hash, 24) - 0.5) * 0.5;
+        let span = |values: &mut dyn Iterator<Item = f32>| {
+            let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+            for value in values {
+                min = min.min(value);
+                max = max.max(value);
+            }
+            (min, max)
+        };
+        let (x_min, x_max) = span(&mut vertices.iter().map(|v| v.x));
+        let (y_min, y_max) = span(&mut vertices.iter().map(|v| v.y));
+        let (z_min, z_max) = span(&mut vertices.iter().map(|v| v.z));
+        assert!((x_max - x_min - 0.9).abs() < 1.0e-5, "x {x_min}..{x_max}");
+        assert!((z_max - z_min - 0.9).abs() < 1.0e-5, "z {z_min}..{z_max}");
+        assert!((y_min - py as f32).abs() < 1.0e-5, "y {y_min}");
+        assert!((y_max - (py + 1.0) as f32).abs() < 1.0e-5, "y {y_max}");
+        assert!(((x_min + x_max) / 2.0 - (px + 0.5) as f32).abs() < 1.0e-5);
+        assert!(((z_min + z_max) / 2.0 - (pz + 0.5) as f32).abs() < 1.0e-5);
+    }
+
+    /// Both halves of a double plant draw the same one-block cross at the same
+    /// column offset (the hash has no y term), the upper half with the top
+    /// sprite of the variant its lower half stores.
+    #[test]
+    fn a_double_plants_halves_stay_aligned_and_use_the_top_sprite() {
+        let mut world = TestWorld::new();
+        world.set(5, 4, 6, fixture::id("double_plant") as u8, 2);
+        world.set(5, 5, 6, fixture::id("double_plant") as u8, 8);
+        let lower = render_vertices(&world, [5, 4, 6], false);
+        let upper = render_vertices(&world, [5, 5, 6], false);
+        assert_eq!(lower.len(), 16);
+        assert_eq!(upper.len(), 16);
+        for (low, high) in lower.iter().zip(&upper) {
+            assert_eq!((low.x, low.z), (high.x, high.z), "the halves lean apart");
+            assert!((high.y - low.y - 1.0).abs() < 1.0e-5);
+        }
+        let sprites = fixture::double_plant_sprites();
+        assert_eq!(lower[0].u, sprites.bottom[2].u_min());
+        assert_eq!(upper[0].u, sprites.top[2].u_min());
+    }
+
+    /// A sunflower's upper half adds its tilted face cross; an upper half of
+    /// any other variant draws only the cross.
+    #[test]
+    fn a_sunflower_upper_half_adds_its_face_cross() {
+        let mut world = TestWorld::new();
+        world.set(7, 4, 6, fixture::id("double_plant") as u8, 0);
+        world.set(7, 5, 6, fixture::id("double_plant") as u8, 8);
+        assert_eq!(render_vertices(&world, [7, 5, 6], false).len(), 24);
+        world.set(9, 4, 6, fixture::id("double_plant") as u8, 2);
+        world.set(9, 5, 6, fixture::id("double_plant") as u8, 8);
+        assert_eq!(render_vertices(&world, [9, 5, 6], false).len(), 16);
+    }
+
+    /// An upper half with no double plant below it draws nothing: it has no
+    /// variant to take its sprite and tint from.
+    #[test]
+    fn a_dangling_upper_half_draws_nothing() {
+        let mut world = TestWorld::new();
+        world.set(4, 4, 6, fixture::id("stone") as u8, 0);
+        world.set(4, 5, 6, fixture::id("double_plant") as u8, 8);
+        let [x, y, z] = [4, 5, 6];
+        let def = world.state(x, y, z).block;
+        let mut renderer = RenderBlocks::new(
+            &world,
+            RenderOptions {
+                ao: 0,
+                fancy_graphics: false,
+                anaglyph: false,
+            },
+        );
+        assert!(!renderer.tesselate_in_world(&def, x, y, z));
+        assert!(renderer.tesselator.vertices.is_empty());
     }
 
     #[test]

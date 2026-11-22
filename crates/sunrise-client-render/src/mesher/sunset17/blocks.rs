@@ -51,6 +51,9 @@ pub enum Kind {
     Fence,
     /// Crossed squares (render types 1 and 6).
     Cross(CrossKind),
+    /// A double plant (render type 40): the same cross in both halves, its
+    /// sprite and tint taken from the variant the lower half carries.
+    DoublePlant,
     /// Crops (render type 6): crossed squares anchored at the block centre.
     Plant,
     /// Water and lava (render type 4).
@@ -472,6 +475,7 @@ fn kind_of(name: &str) -> Kind {
         "snow_layer" => Kind::Snow,
         "fence" | "nether_brick_fence" => Kind::Fence,
         "tallgrass" => Kind::Cross(CrossKind::TallGrass),
+        "double_plant" => Kind::DoublePlant,
         "yellow_flower" | "red_flower" => Kind::Cross(CrossKind::Flower),
         "brown_mushroom" | "red_mushroom" | "deadbush" | "web" | "reeds" | "vine" => {
             Kind::Cross(CrossKind::Plain)
@@ -484,10 +488,8 @@ fn kind_of(name: &str) -> Kind {
             Kind::Plant
         }
         "waterlily" => Kind::LilyPad,
-        // A double plant crosses at the same 0.3 offset as a flower; its
-        // upper half and the sunflower's second cross are not ported.
+        // A sapling crosses at the block centre.
         "sapling" => Kind::Cross(CrossKind::Plain),
-        "double_plant" => Kind::Cross(CrossKind::Flower),
         _ if name.ends_with("_stairs") => Kind::Stairs,
         _ => Kind::Cube,
     }
@@ -512,7 +514,7 @@ fn material_of(name: &str, kind: Kind) -> Material {
         Kind::Glass => Material::GLASS,
         Kind::Ice => Material::ICE,
         Kind::Leaves => Material::LEAVES,
-        Kind::Cross(_) | Kind::Plant => Material::PLANT,
+        Kind::Cross(_) | Kind::Plant | Kind::DoublePlant => Material::PLANT,
         Kind::Snow => Material::SNOW_LAYER,
         Kind::Torch => Material::PLANT,
         Kind::Cactus => Material::CACTUS,
@@ -748,6 +750,7 @@ mod tests {
         assert_eq!(Kind::of("stone_slab"), Kind::Slab { double: false });
         assert_eq!(Kind::of("double_wooden_slab"), Kind::Slab { double: true });
         assert_eq!(Kind::of("tallgrass"), Kind::Cross(CrossKind::TallGrass));
+        assert_eq!(Kind::of("double_plant"), Kind::DoublePlant);
         assert_eq!(Kind::of("water"), Kind::Liquid(LiquidKind::Water));
         assert_eq!(Kind::of("wheat"), Kind::Plant);
         assert_eq!(Kind::of("snow_layer"), Kind::Snow);

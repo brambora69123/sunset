@@ -47,6 +47,11 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
 /// panes, chests, doors, signs…) where the era class gives one, and nothing for
 /// the flat or thin decorations the era gives no box — tall grass, flowers,
 /// saplings, crops, torches, rails, redstone wire.
+///
+/// The outline the client draws around the picked block is its `setShape` box
+/// too, but `getCollisionShape` answers null for those decorations, so
+/// [`era_outline_shape`] supplies their box from the same classes; the rest of
+/// the era keeps the client's default full cube.
 pub fn load_1_7_10<'r>(
     root: &Path,
     registry: &'r BlockRegistry,
@@ -54,14 +59,19 @@ pub fn load_1_7_10<'r>(
     let facts = sunrise_items::blocks::BlockFacts::load(root, registry)?;
     let table = sunrise_world::level::states::StateTable::new(registry)?;
     let mut shapes = Vec::with_capacity(registry.len());
+    let mut outlines = Vec::with_capacity(registry.len());
     for id in 0..registry.len() {
         let state = BlockStateId(id as u32);
-        let full = facts.get(state).full_collision;
-        shapes.push(sunrise_world::collision::era_collision_shape(
-            &table, state, full,
-        )?);
+        let state_facts = facts.get(state);
+        let collision = sunrise_world::collision::era_collision_shape(
+            &table,
+            state,
+            state_facts.full_collision,
+        )?;
+        outlines.push(era_outline_shape(state_facts)?);
+        shapes.push(collision);
     }
-    let tag = collision_table(registry, &shapes)?;
+    let tag = collision_table(registry, &shapes, &outlines)?;
     let cached = CachedCollisionRegistry::from_nbt(&tag, registry)?;
     if !cached.has_canonical_identities() {
         return Err("1.7.10 collisions require canonical shape identities".into());
@@ -69,12 +79,66 @@ pub fn load_1_7_10<'r>(
     Ok(BlockCollisionRegistry::new(Arc::new(cached))?)
 }
 
+/// The outline a 1.7.10 block draws when picked: `Block.getOutlineShape` after
+/// `updateShape`, i.e. the box its class last passed to `setShape`. Only the
+/// classes whose `getCollisionShape` is null need a row: everywhere else the
+/// client's default full cube is what 1.7.10 draws for a cube, and the blocks
+/// whose outline the era derives from a connected or open state keep that
+/// default until their own rules are ported.
+fn era_outline_shape(facts: &sunrise_items::blocks::StateFacts) -> io::Result<Option<VoxelShape>> {
+    // `DoublePlantBlock.updateShape` sets the full cube, which the default
+    // outline already is.
+    if facts.has_class("DoublePlantBlock") {
+        return Ok(None);
+    }
+    let Some(box_) = era_decoration_box(facts) else {
+        return Ok(None);
+    };
+    let widen = |value: f32| f64::from(value);
+    VoxelShape::from_box(Aabb::new(
+        Vec3::new(widen(box_[0]), widen(box_[1]), widen(box_[2])),
+        Vec3::new(widen(box_[3]), widen(box_[4]), widen(box_[5])),
+    ))
+    .map(Some)
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
+/// The `setShape` box of the 1.7.10 classes whose `getCollisionShape` is null,
+/// as the constructor (or `updateShape`) of that class sets it.
+fn era_decoration_box(facts: &sunrise_items::blocks::StateFacts) -> Option<[f32; 6]> {
+    if facts.has_class("TallPlantBlock")
+        || facts.has_class("DeadBushBlock")
+        || facts.has_class("SaplingBlock")
+    {
+        // `TallPlantBlock`/`DeadBushBlock`/`SaplingBlock`: the 0.4 inset.
+        Some([0.1, 0.0, 0.1, 0.9, 0.8, 0.9])
+    } else if facts.has_class("MushroomPlantBlock") {
+        Some([0.3, 0.0, 0.3, 0.7, 0.4, 0.7])
+    } else if facts.has_class("WheatBlock") || facts.has_class("NetherWartBlock") {
+        // `WheatBlock` (and the crops built on it) grows four pixels tall.
+        Some([0.0, 0.0, 0.0, 1.0, 0.25, 1.0])
+    } else if facts.has_class("StemBlock") {
+        Some([0.375, 0.0, 0.375, 0.625, 0.25, 0.625])
+    } else if facts.has_class("SugarCaneBlock") {
+        Some([0.125, 0.0, 0.125, 0.875, 1.0, 0.875])
+    } else if facts.has_class("LilyPadBlock") {
+        Some([0.0, 0.0, 0.0, 1.0, 0.015625, 1.0])
+    } else if facts.has_class("PlantBlock") {
+        // `FlowerBlock` keeps `PlantBlock`'s 0.2 inset: a 0.6-tall box.
+        Some([0.3, 0.0, 0.3, 0.7, 0.6, 0.7])
+    } else {
+        None
+    }
+}
+
 /// [`load_1_7_10`]'s table as the NBT `cached-collision.nbt` carries: one entry
 /// per distinct shape (the empty shape and the full cube, both canonical), then a
-/// shape id per registry state.
+/// shape id per registry state, and the decorations whose outline is not the
+/// full cube as context outline rows.
 fn collision_table(
     registry: &BlockRegistry,
     shapes: &[VoxelShape],
+    outlines: &[Option<VoxelShape>],
 ) -> Result<sunrise_core::nbt::Tag> {
     use sunrise_core::{
         geometry::{Axis, VoxelShape},
@@ -100,11 +164,19 @@ fn collision_table(
             );
         }
         let cube = shape.is_cube();
-        let cells = shape.sizes().iter().product::<usize>();
-        entry.insert(
-            key("occupied"),
-            Tag::ByteArray(if cube { vec![1; cells] } else { vec![0; cells] }),
-        );
+        let sizes = shape.sizes();
+        let cells = sizes.iter().product::<usize>();
+        // `CachedCollisionRegistry::from_table` reads one byte per grid cell,
+        // x-major then y then z, and builds the shape's occupancy from it.
+        let mut occupied = Vec::with_capacity(cells);
+        for x in 0..sizes[0] as i32 {
+            for y in 0..sizes[1] as i32 {
+                for z in 0..sizes[2] as i32 {
+                    occupied.push(u8::from(shape.is_full(x, y, z)));
+                }
+            }
+        }
+        entry.insert(key("occupied"), Tag::ByteArray(occupied));
         let axes = shape
             .cube_coordinate_axes()
             .iter()
@@ -112,12 +184,9 @@ fn collision_table(
             .fold(0i8, |bits, (axis, cube)| bits | (i8::from(*cube) << axis));
         entry.insert(key("cube_axes"), Tag::Byte(axes));
         entry.insert(key("cube"), Tag::Byte(i8::from(cube)));
-        let sizes = shape.sizes();
-        entry.insert(key("discrete_min"), Tag::IntArray(vec![0; 3]));
-        entry.insert(
-            key("discrete_max"),
-            Tag::IntArray(sizes.iter().map(|&v| v as i32).collect()),
-        );
+        let (discrete_min, discrete_max) = shape.discrete_bounds();
+        entry.insert(key("discrete_min"), Tag::IntArray(discrete_min.to_vec()));
+        entry.insert(key("discrete_max"), Tag::IntArray(discrete_max.to_vec()));
         Tag::Compound(entry)
     };
     let shape_key = |shape: &VoxelShape| -> Vec<u64> {
@@ -131,11 +200,9 @@ fn collision_table(
         (shape_key(&interned[0]), 0),
         (shape_key(&interned[1]), 1),
     ]);
-    let mut cached_shapes = Vec::with_capacity(registry.len());
-    for id in 0..registry.len() {
-        let shape = shapes.get(id).cloned().unwrap_or_else(VoxelShape::empty);
+    let mut intern = |shape: VoxelShape| -> Result<i32> {
         let key = shape_key(&shape);
-        let index = match seen.get(&key) {
+        Ok(match seen.get(&key) {
             Some(index) => *index,
             None => {
                 let index = i32::try_from(interned.len())?;
@@ -143,8 +210,32 @@ fn collision_table(
                 seen.insert(key, index);
                 index
             }
+        })
+    };
+    let mut cached_shapes = Vec::with_capacity(registry.len());
+    for id in 0..registry.len() {
+        let shape = shapes.get(id).cloned().unwrap_or_else(VoxelShape::empty);
+        cached_shapes.push(intern(shape)?);
+    }
+    // The declared outline channel: only the states whose box is not the full
+    // cube the client falls back to get a row.
+    let mut context_rows = Vec::new();
+    for (id, outline) in outlines.iter().enumerate() {
+        let Some(outline) = outline else {
+            continue;
         };
-        cached_shapes.push(index);
+        let shape = intern(outline.clone())?;
+        let mut row = Compound::new();
+        row.insert(key("state"), Tag::Int(i32::try_from(id)?));
+        for channel in [
+            "outline_item",
+            "outline_player",
+            "outline_living",
+            "outline_other",
+        ] {
+            row.insert(key(channel), Tag::Int(shape));
+        }
+        context_rows.push(Tag::Compound(row));
     }
     let mut table = Compound::new();
     table.insert(key("DataVersion"), Tag::Int(sunrise_world::DATA_VERSION));
@@ -177,6 +268,9 @@ fn collision_table(
         ),
     );
     table.insert(key("cached_shapes"), Tag::IntArray(cached_shapes));
+    if !context_rows.is_empty() {
+        table.insert(key("context_shapes"), Tag::List(context_rows));
+    }
     Ok(Tag::Compound(table))
 }
 

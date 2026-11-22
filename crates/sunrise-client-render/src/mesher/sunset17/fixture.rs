@@ -10,6 +10,7 @@ use super::StateTable17;
 use super::blocks::{
     BlockDef, FACE_BOTTOM, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_TOP, FACE_WEST,
 };
+use super::render::DoublePlantSprites;
 use super::sprite::Sprite;
 use super::world::WorldView;
 
@@ -55,7 +56,7 @@ fn rows() -> Vec<Row> {
     let water_still = cell(5, 3);
     let water_flow = cell(6, 3);
     let snow = cell(7, 3);
-    vec![
+    let mut rows = vec![
         Row {
             id: 1,
             meta: 0,
@@ -265,7 +266,56 @@ fn rows() -> Vec<Row> {
             sprites: same(snow),
             overlay: None,
         },
-    ]
+    ];
+    double_plant_rows(&mut rows);
+    rows
+}
+
+/// `DoublePlantBlock`'s sprites at the oracle's atlas cells: bottom and top by
+/// variant, then the sunflower's face front and back.
+pub fn double_plant_sprites() -> DoublePlantSprites {
+    let bottom = [
+        cell(4, 4),
+        cell(8, 4),
+        cell(0, 4),
+        cell(2, 4),
+        cell(10, 4),
+        cell(12, 4),
+    ];
+    let top = [
+        cell(5, 4),
+        cell(9, 4),
+        cell(1, 4),
+        cell(3, 4),
+        cell(11, 4),
+        cell(13, 4),
+    ];
+    DoublePlantSprites {
+        bottom,
+        top,
+        sunflower: [cell(6, 4), cell(7, 4)],
+    }
+}
+
+/// The double plant's sixteen metadata values: the six variants as the lower
+/// half, and the upper half (bit 8) with the rotation bits a placed plant may
+/// carry.
+fn double_plant_rows(rows: &mut Vec<Row>) {
+    let sprites = double_plant_sprites();
+    for meta in 0..16u8 {
+        let variant = usize::from(meta & 7).min(5);
+        rows.push(Row {
+            id: 175,
+            meta,
+            name: "double_plant",
+            sprites: same(if meta & 8 != 0 {
+                sprites.top[variant]
+            } else {
+                sprites.bottom[variant]
+            }),
+            overlay: None,
+        });
+    }
 }
 
 /// The fixture states, in the probe's state order.
@@ -310,6 +360,7 @@ pub fn id(name: &str) -> u16 {
         "ice" => 79,
         "stained_glass" => 95,
         "tallgrass" => 31,
+        "double_plant" => 175,
         "stone_slab" => 44,
         "torch" => 50,
         "oak_stairs" => 53,
@@ -336,6 +387,7 @@ pub struct TestWorld {
     state: Vec<u16>,
     sky: Vec<u8>,
     blocklight: Vec<u8>,
+    double_plant: DoublePlantSprites,
     pub grass_tint: i32,
 }
 
@@ -346,6 +398,7 @@ impl TestWorld {
             state: vec![0; (SIZE * SIZE * SIZE) as usize],
             sky: vec![15; (SIZE * SIZE * SIZE) as usize],
             blocklight: vec![0; (SIZE * SIZE * SIZE) as usize],
+            double_plant: double_plant_sprites(),
             grass_tint: GRASS_TINT,
         }
     }
@@ -429,6 +482,10 @@ impl WorldView for TestWorld {
 
     fn biome_tint(&self, _tint: super::blocks::Tint, _x: i32, _y: i32, _z: i32) -> i32 {
         self.grass_tint
+    }
+
+    fn double_plant_sprites(&self) -> Option<&DoublePlantSprites> {
+        Some(&self.double_plant)
     }
 }
 

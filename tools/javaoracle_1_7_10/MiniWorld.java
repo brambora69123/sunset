@@ -58,6 +58,10 @@ public class MiniWorld {
         set(world, World.class, "profiler", new net.minecraft.util.profiler.Profiler());
         set(world, World.class, "lightPropagation", new int[1 << 20]);
         set(world, World.class, "eventListeners", new java.util.ArrayList());
+        // Allocated without a constructor, so the field initialisers never ran:
+        // `NaturalSpawner.populateChunk` (part of the population pass) adds mobs.
+        set(world, World.class, "entities", new java.util.ArrayList());
+        set(world, World.class, "entitiesToRemove", new java.util.ArrayList());
 
         Object data = unsafe.allocateInstance(net.minecraft.world.WorldData.class);
         set(world, World.class, "data", data);
@@ -67,6 +71,12 @@ public class MiniWorld {
 
         set(world, net.minecraft.server.world.ServerWorld.class, "scheduledTicks", new java.util.HashSet());
         set(world, net.minecraft.server.world.ServerWorld.class, "scheduledTicksInOrder", new java.util.TreeSet());
+        set(
+            world,
+            net.minecraft.server.world.ServerWorld.class,
+            "entitiesById",
+            new net.minecraft.util.Int2ObjectHashMap()
+        );
         return world;
     }
 }

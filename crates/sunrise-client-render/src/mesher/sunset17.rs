@@ -232,6 +232,9 @@ pub struct EraRenderAssets {
     pub blocks: Vec<crate::sunset17_assets::BlockRow>,
     /// The layer `grass_side_overlay` sits on, when the atlas has it.
     pub overlay_layer: Option<u16>,
+    /// The double plant's per-variant sprites, which no state carries: the
+    /// upper half's texture follows the lower half's variant.
+    pub double_plant: render::DoublePlantSprites,
     pub colormaps: Colormaps,
 }
 
@@ -253,6 +256,7 @@ impl EraRenderAssets {
         Ok(EraRenderAssets {
             blocks: era.blocks().to_vec(),
             overlay_layer,
+            double_plant: render::DoublePlantSprites::from_layers(layers),
             colormaps: Colormaps::load(source),
         })
     }
@@ -262,6 +266,7 @@ impl EraRenderAssets {
 struct SectionWorld<'a> {
     pad: &'a Padded,
     table: &'a StateTable17,
+    render: &'a RenderAssets,
     biomes: &'a Biomes,
     tints: &'a Tints<'a>,
 }
@@ -323,6 +328,10 @@ impl WorldView for SectionWorld<'_> {
     fn biome_tint(&self, tint: Tint, x: i32, y: i32, z: i32) -> i32 {
         self.era_tint(tint, x, y, z)
     }
+
+    fn double_plant_sprites(&self) -> Option<&render::DoublePlantSprites> {
+        self.render.era.as_ref().map(|era| &era.double_plant)
+    }
 }
 
 /// Everything one section's era mesh reads.
@@ -355,6 +364,7 @@ pub(super) fn mesh(input: MeshInput<'_>, out: &mut SectionMesh) {
     let world = SectionWorld {
         pad,
         table,
+        render,
         biomes,
         tints,
     };
@@ -582,6 +592,7 @@ mod tests {
                     textureless: false,
                 }],
                 overlay_layer: Some(9),
+                double_plant: render::DoublePlantSprites::from_layers(&Default::default()),
                 colormaps: Colormaps::default(),
             }),
         };

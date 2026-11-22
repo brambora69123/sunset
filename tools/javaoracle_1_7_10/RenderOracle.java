@@ -84,6 +84,20 @@ public class RenderOracle {
         grid("water_still", 5, 3);
         grid("water_flow", 6, 3);
         grid("snow", 7, 3);
+        grid("double_plant_grass_bottom", 0, 4);
+        grid("double_plant_grass_top", 1, 4);
+        grid("double_plant_fern_bottom", 2, 4);
+        grid("double_plant_fern_top", 3, 4);
+        grid("double_plant_sunflower_bottom", 4, 4);
+        grid("double_plant_sunflower_top", 5, 4);
+        grid("double_plant_sunflower_front", 6, 4);
+        grid("double_plant_sunflower_back", 7, 4);
+        grid("double_plant_syringa_bottom", 8, 4);
+        grid("double_plant_syringa_top", 9, 4);
+        grid("double_plant_rose_bottom", 10, 4);
+        grid("double_plant_rose_top", 11, 4);
+        grid("double_plant_paeonia_bottom", 12, 4);
+        grid("double_plant_paeonia_top", 13, 4);
     }
 
     static void grid(String name, int column, int row) {
@@ -184,6 +198,7 @@ public class RenderOracle {
         Blocks.STONE_SLAB.registerSprites(registry);
         Blocks.FENCE.registerSprites(registry);
         Blocks.TALLGRASS.registerSprites(registry);
+        Blocks.DOUBLE_PLANT.registerSprites(registry);
         Blocks.WATER.registerSprites(registry);
         Blocks.FLOWING_WATER.registerSprites(registry);
         Blocks.SNOW_LAYER.registerSprites(registry);
@@ -276,6 +291,21 @@ public class RenderOracle {
                 run(name + "_ao" + mode, mode, false, Blocks.TALLGRASS, plantMeta, 2, 6, 4, p -> p.put(2, 5, 4, Blocks.DIRT, 0));
             }
         }
+
+        // A double plant: the lower half carries the variant, the upper half
+        // reads it from the block below; both draw a one-block cross at the
+        // same x/z offset (the hash has no y term), and variant 0's upper half
+        // adds the sunflower's face cross.
+        for (int ao = 0; ao <= 1; ao++) {
+            final int mode = ao;
+            run("double_plant_grass_lower_ao" + mode, mode, false, Blocks.DOUBLE_PLANT, 2, 3, 6, 4, p -> p.put(3, 5, 4, Blocks.GRASS, 0));
+            run("double_plant_grass_upper_ao" + mode, mode, false, Blocks.DOUBLE_PLANT, 8, 3, 6, 4, p -> p.put(3, 5, 4, Blocks.DOUBLE_PLANT, 2));
+            run("double_plant_fern_upper_ao" + mode, mode, false, Blocks.DOUBLE_PLANT, 8, 10, 6, 4, p -> p.put(10, 5, 4, Blocks.DOUBLE_PLANT, 3));
+            run("double_plant_sunflower_lower_ao" + mode, mode, false, Blocks.DOUBLE_PLANT, 0, 12, 6, 4, p -> p.put(12, 5, 4, Blocks.GRASS, 0));
+            run("double_plant_sunflower_upper_ao" + mode, mode, false, Blocks.DOUBLE_PLANT, 8, 12, 6, 4, p -> p.put(12, 5, 4, Blocks.DOUBLE_PLANT, 0));
+        }
+        // An upper half with no double plant below draws nothing.
+        run("double_plant_upper_dangling_ao1", 1, false, Blocks.DOUBLE_PLANT, 8, 6, 6, 8, p -> p.put(6, 5, 8, Blocks.STONE, 0));
 
         // Still water and flowing water in a channel.
         for (int ao = 0; ao <= 1; ao++) {

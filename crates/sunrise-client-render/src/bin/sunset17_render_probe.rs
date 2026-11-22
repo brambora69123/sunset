@@ -312,6 +312,91 @@ fn main() {
             );
         }
     }
+    // A double plant: the lower half carries the variant, the upper half reads
+    // it from the block below; both draw a one-block cross at the same x/z
+    // offset (the hash has no y term), and variant 0's upper half adds the
+    // sunflower's face cross.
+    for ao in 0..=1 {
+        case(
+            Case {
+                name: &format!("double_plant_grass_lower_ao{ao}"),
+                ao,
+                fancy: false,
+                block: "double_plant",
+                meta: 2,
+                at: [3, 6, 4],
+            },
+            |world| {
+                world.set(3, 5, 4, fixture::id("grass") as u8, 0);
+            },
+        );
+        case(
+            Case {
+                name: &format!("double_plant_grass_upper_ao{ao}"),
+                ao,
+                fancy: false,
+                block: "double_plant",
+                meta: 8,
+                at: [3, 6, 4],
+            },
+            |world| {
+                world.set(3, 5, 4, fixture::id("double_plant") as u8, 2);
+            },
+        );
+        case(
+            Case {
+                name: &format!("double_plant_fern_upper_ao{ao}"),
+                ao,
+                fancy: false,
+                block: "double_plant",
+                meta: 8,
+                at: [10, 6, 4],
+            },
+            |world| {
+                world.set(10, 5, 4, fixture::id("double_plant") as u8, 3);
+            },
+        );
+        case(
+            Case {
+                name: &format!("double_plant_sunflower_lower_ao{ao}"),
+                ao,
+                fancy: false,
+                block: "double_plant",
+                meta: 0,
+                at: [12, 6, 4],
+            },
+            |world| {
+                world.set(12, 5, 4, fixture::id("grass") as u8, 0);
+            },
+        );
+        case(
+            Case {
+                name: &format!("double_plant_sunflower_upper_ao{ao}"),
+                ao,
+                fancy: false,
+                block: "double_plant",
+                meta: 8,
+                at: [12, 6, 4],
+            },
+            |world| {
+                world.set(12, 5, 4, fixture::id("double_plant") as u8, 0);
+            },
+        );
+    }
+    // An upper half with no double plant below draws nothing.
+    case(
+        Case {
+            name: "double_plant_upper_dangling_ao1",
+            ao: 1,
+            fancy: false,
+            block: "double_plant",
+            meta: 8,
+            at: [6, 6, 8],
+        },
+        |world| {
+            world.set(6, 5, 8, fixture::id("stone") as u8, 0);
+        },
+    );
     for ao in 0..=1 {
         case(
             Case {
