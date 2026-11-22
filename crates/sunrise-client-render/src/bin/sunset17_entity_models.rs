@@ -54,7 +54,10 @@ fn main() {
         }
     }
 
-    if sunset17_assets::detect(&root) {
+    if matches!(
+        sunrise_core::profile::Profile::of_resource_root(&root),
+        Ok(sunrise_core::profile::Profile::V1_7_10)
+    ) {
         let path = root.join(sunset17_assets::ENTITY_MODELS_FILE);
         match std::fs::read(&path)
             .ok()
