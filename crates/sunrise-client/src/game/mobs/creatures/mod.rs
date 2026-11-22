@@ -1323,6 +1323,20 @@ impl Game<'_> {
     pub(super) fn local_difficulty(&self, at: [f64; 3]) -> spawning::LocalDifficulty {
         local_difficulty_in(&self.world, at)
     }
+    /// `MobEntity.initialize` for a 1.7.10 natural spawn: the game's own
+    /// finalization at `Reason::Natural` (`spawn_1_7_10` adds the era mobs,
+    /// whose `finalize_plain` lives under this module).
+    pub(super) fn finalize_era_spawn(
+        &mut self,
+        mob: &mut Mob,
+        difficulty: &spawning::LocalDifficulty,
+    ) {
+        self.finalize_plain(
+            mob,
+            difficulty,
+            sunrise_client::mobs::spawn_rules::Reason::Natural,
+        );
+    }
     /// Generation's animals for the chunks generated since, once lit: chunk
     /// generation places them whether the level ticks or not.
     pub(super) fn spawn_fresh_chunks(&mut self) {
