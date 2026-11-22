@@ -1208,6 +1208,19 @@ impl<'a> Game<'a> {
         if self.entity_ids_exhausted() {
             return;
         }
+        if self.pack.profile == sunrise_core::profile::Profile::V1_7_10 {
+            let from = self.lan_synced_from();
+            sunrise_client::spans::time("spawn_natural_1_7_10", || self.spawn_natural_1_7_10());
+            if self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
+            {
+                sunrise_client::spans::time("spawn_custom", || self.tick_custom_spawners());
+            }
+            self.lan_synced_since(from);
+            return;
+        }
         let from = self.lan_synced_from();
         sunrise_client::spans::time("spawn_raids", || self.tick_raids());
         sunrise_client::spans::time("spawn_natural", || self.spawn_natural());
@@ -1350,6 +1363,10 @@ impl<'a> Game<'a> {
     /// keeps its chunks empty (the dimension is also checked, as before, so a
     /// preset that fails to load cannot start filling the End).
     pub(super) fn spawn_generation_creatures(&mut self, cx: i32, cz: i32) {
+        if self.pack.profile == sunrise_core::profile::Profile::V1_7_10 {
+            self.spawn_original_mobs_1_7_10(cx, cz);
+            return;
+        }
         if !self.world.chunks.contains_key(&(cx, cz)) || self.dim == Dim::End {
             return;
         }
