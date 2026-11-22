@@ -487,7 +487,7 @@ fn era_fast(
     vertices: &mut Vec<crate::mesher::Vertex>,
     input: &Input<'_>,
     uv: [f32; 4],
-    bottom: f32,
+    _bottom: f32,
 ) {
     let drift = (input.time.rem_euclid(256 * 400) as f64 + input.partial_tick) * 0.03;
     let mut x = input.camera.x + drift;
