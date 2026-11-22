@@ -203,6 +203,11 @@ impl Game<'_> {
 
     /// The screen uses the completed cache, with the same holder definitions for search text.
     pub(in crate::game) fn refresh_creative_tabs(&mut self) {
+        // 1.7.10's tabs are the era's static `addItems` lists, not the
+        // modern catalog (the era has no `creative-inventory.json`).
+        if self.pack.profile == sunrise_core::profile::Profile::V1_7_10 {
+            return;
+        }
         let Ok(lists) = self.build_creative(self.creative_permissions()) else {
             return;
         };

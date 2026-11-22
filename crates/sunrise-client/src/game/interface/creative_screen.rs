@@ -82,6 +82,10 @@ impl Game<'_> {
     /// `CreativeModeInventoryScreen.extractRenderState`: item slots share the
     /// container screen's hover target for their highlight and tooltip.
     pub(super) fn draw_creative(&mut self, batch: &mut HudBatch) {
+        if self.era_ui() {
+            self.draw_era_creative(batch);
+            return;
+        }
         // CreativeModeInventoryScreen: `CommonComponents.EMPTY` for a title.
         screen_info::begin_container("creative");
         let (ox, oy) = Self::creative_origin(batch);
@@ -362,6 +366,10 @@ impl Game<'_> {
         );
     }
     pub(super) fn click_creative(&mut self, right: bool) {
+        if self.era_ui() {
+            self.click_era_creative(right);
+            return;
+        }
         if self.mod_browser_press(right) {
             return;
         }

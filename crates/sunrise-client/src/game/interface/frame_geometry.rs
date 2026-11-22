@@ -479,12 +479,24 @@ impl Game<'_> {
                 eye[1].floor() as i32,
                 eye[2].floor() as i32,
             );
-            self.submit_item_world(
-                &state,
-                m,
-                block_entity_render::vertex_light(light),
-                &mut out,
-            );
+            let packed_light = block_entity_render::vertex_light(light);
+            // A 1.7.10 item has no model files: `ItemInHandRenderer.render`
+            // draws its sprite as a flat quad in the hand, at 1.7.10's pose.
+            if self.era_ui() {
+                if let Some(legacy) = sunrise_client::first_person::legacy_item_pose(
+                    left,
+                    inverse_height,
+                    attack,
+                    pose,
+                    false,
+                ) {
+                    m = to_world * legacy * sunrise_client::first_person::modern_flat_display(left);
+                }
+                if self.era_hand_quad(&stack, m, packed_light, &mut out) {
+                    continue;
+                }
+            }
+            self.submit_item_world(&state, m, packed_light, &mut out);
         }
         // The hand has its own submit storage, which never uses improved
         // transparency (`LevelRenderer` alone calls `setUseImprovedTransparency`):
@@ -493,6 +505,63 @@ impl Game<'_> {
             vertex.layer &= !sunrise_client::gfx::OIT_ENTITY;
         }
         (out, runs)
+    }
+
+    /// A 1.7.10 held item's flat sprite: `ItemInHandRenderer.render`'s
+    /// `draw` quad, at the hand pose `m`. The sprite is the era's own
+    /// (`ItemModelGenerator` has no model, so the icon is the item's texture);
+    /// the era's item atlas is the renderer's sprite array.
+    fn era_hand_quad(
+        &self,
+        stack: &ItemStack,
+        m: glam::Mat4,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) -> bool {
+        let Some(id) = sunrise_client::items_1_7_10::item_id(&stack.item) else {
+            return false;
+        };
+        let Some(texture) =
+            sunrise_client::sunset17_assets::item_texture(i32::from(id), stack.damage as i32)
+        else {
+            return false;
+        };
+        let name = sunrise_client::sunset17_assets::sprite_name(&texture);
+        let Some(rect) = self.gui.atlas.gui_rect(&name).copied() else {
+            return false;
+        };
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        let uv = [
+            [rect.u0, rect.v1],
+            [rect.u1, rect.v1],
+            [rect.u1, rect.v0],
+            [rect.u0, rect.v0],
+        ];
+        for back in [false, true] {
+            let indices = if back {
+                [0, 2, 1, 0, 3, 2]
+            } else {
+                [0, 1, 2, 0, 2, 3]
+            };
+            for i in indices {
+                let pos = m.transform_point3(glam::Vec3::from(corners[i]));
+                out.push(Vertex {
+                    pos: pos.to_array(),
+                    uv: uv[i],
+                    layer: 0,
+                    color: u32::MAX,
+                    light,
+                    normal: [0, 0, if back { 127 } else { -127 }, -127],
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+        true
     }
     /// WeatherEffectRenderer: rain and snow columns within the weather radius.
     pub(super) fn weather_geometry(

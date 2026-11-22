@@ -1555,7 +1555,7 @@ impl Game<'_> {
         } else if let Some(head) = sunrise_client::item_tooltip::player_head_name(stack) {
             head.title(&|key| self.pack.names.display_get(key))
         } else {
-            self.pack.names.display_item(&stack.item)
+            self.pack.names.display_stack(stack)
         }
     }
     /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's

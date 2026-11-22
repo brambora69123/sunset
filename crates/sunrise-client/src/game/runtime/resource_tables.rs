@@ -320,7 +320,9 @@ impl PackResources {
         // of the pack assembly on the critical path behind its own files.
         let (names, clouds, forcefield, custom_sky, environments, polytone_particles) =
             std::thread::scope(|scope| {
-                let names = named_scope(scope, "pack.names", || Names::load(root.source()));
+                let names = named_scope(scope, "pack.names", || {
+                    Names::load_for(root.source(), assets.profile)
+                });
                 let clouds = named_scope(scope, "pack.clouds", || {
                     sunrise_client::clouds::load(root.source())
                 });

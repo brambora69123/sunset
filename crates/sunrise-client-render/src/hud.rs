@@ -1315,15 +1315,16 @@ impl HudAtlas {
     }
     /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens,
     /// `textures/font` sheets, `textures/environment` sky (sun, moon phases, clouds and the
-    /// End sky) and the `textures/entity` sheets the mob pass reads, packed into the same
-    /// atlas the HUD draws from. Its screens are looked up by their era path
-    /// (`blit_rect("gui/icons")`), and the font is the bitmap one ([`crate::font::Font`]
-    /// reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
+    /// End sky), the `textures/entity` sheets the mob pass reads and the era's block and item
+    /// icons (`textures/blocks`, `textures/items`), packed into the same atlas the HUD draws
+    /// from. Its screens are looked up by their era path (`blit_rect("gui/icons")`), its item
+    /// icons by theirs (`items/stick`, `blocks/stone`), and the font is the bitmap one
+    /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
     pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         let mut atlas = Self::pack(
             root,
             defaults,
-            &["gui", "font", "environment", "entity"],
+            &["gui", "font", "environment", "entity", "blocks", "items"],
             false,
             false,
         )?;

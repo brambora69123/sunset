@@ -109,7 +109,8 @@ impl GameCpuResources {
             let creative_screen = named_scope(scope, "game_cpu.creative", move || {
                 let mut creative = if era {
                     log::info!(
-                        "Sunrise: 1.7.10 has no creative-inventory.json; the creative screen has no tabs"
+                        "Sunrise: 1.7.10 has no creative-inventory.json; the creative screen \
+                         uses the era's ten item tabs"
                     );
                     Creative::from_json(&serde_json::json!({
                         "schema": 4,
@@ -124,6 +125,9 @@ impl GameCpuResources {
                 let tab_modifiers =
                     sunrise_client::polytone_creative_tabs::TabModifier::read_all(root);
                 creative.set_pack_modifiers(tab_modifiers);
+                if era {
+                    creative.set_era_tabs(sunrise_client::creative::era_tabs());
+                }
                 Ok::<_, String>(creative)
             });
             (
