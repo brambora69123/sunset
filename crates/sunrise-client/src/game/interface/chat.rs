@@ -516,7 +516,10 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
     let (mut timelines, mut markers) = overworld_timelines(root);
     // 1.7.10 has no timelines or markers: `TimeCommand` reads `day` and `night`
     // as absolute times, and sets them as such.
-    if crate::sunset17_assets::detect(root) {
+    if matches!(
+        sunrise_core::profile::Profile::of_resource_root(root),
+        Ok(sunrise_core::profile::Profile::V1_7_10)
+    ) {
         timelines.clear();
         markers = vec![
             (
@@ -755,11 +758,12 @@ impl Game<'_> {
         }
         let dirs = [self.options.resources.clone(), self.ui.vanilla_root.clone()];
         let registry = self.pack.assets.registry;
+        let profile = self.pack.profile;
         let spawned = std::thread::Builder::new()
             .name("Registries preload".into())
             .spawn(move || {
                 sunrise_threads::behind_server();
-                super::remote::builtin_registries(&dirs[0]);
+                super::remote::builtin_registries(&dirs[0], profile);
                 resource_ids(&dirs[0]);
                 block_properties(registry);
                 for dir in &dirs {

@@ -450,6 +450,7 @@ mod tests {
             &biomes,
             Some(&tables),
             shape.column(),
+            assets.profile,
         )
         .unwrap();
         let name = |x, y, z| biomes.name(back.biome(x, y, z)).to_owned();

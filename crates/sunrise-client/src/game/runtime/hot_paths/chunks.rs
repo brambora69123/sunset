@@ -98,7 +98,7 @@ impl Game<'_> {
                                 .map_err(|error| error.to_string())
                         })
                         .and_then(|(root, _)| {
-                            save::decode(&root, registry, world_biomes!(self))
+                            save::decode(&root, registry, world_biomes!(self), self.pack.profile)
                                 .ok_or_else(|| "a saved chunk did not load".to_owned())
                         });
                     match loaded {

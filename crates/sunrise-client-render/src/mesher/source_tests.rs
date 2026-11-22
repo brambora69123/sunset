@@ -110,6 +110,7 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
     };
     let assets = Assets {
         registry,
+        profile: sunrise_core::profile::Profile::Modern,
         properties: Properties::for_tests(&[
             (true, false, false, false),
             (false, false, false, false),

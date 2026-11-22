@@ -858,8 +858,13 @@ mod plain_name_overlay_tests {
                 if x == 5 {
                     assert!(saved.get("lock").is_some());
                 }
-                let reloaded =
-                    save::decode(&encoded, game.pack.assets.registry, game.res.biomes()).unwrap();
+                let reloaded = save::decode(
+                    &encoded,
+                    game.pack.assets.registry,
+                    game.res.biomes(),
+                    game.pack.profile,
+                )
+                .unwrap();
                 if saved.get("CustomName").is_some()
                     || reloaded.block_names.iter().any(|(p, _)| *p == pos)
                 {
@@ -911,7 +916,13 @@ mod styled_name_model_tests {
             })
             .expect("actual saved block entity")
             .clone();
-        let decoded = save::decode(&encoded, game.pack.assets.registry, game.res.biomes()).unwrap();
+        let decoded = save::decode(
+            &encoded,
+            game.pack.assets.registry,
+            game.res.biomes(),
+            game.pack.profile,
+        )
+        .unwrap();
         assert!(decoded.block_entities.iter().any(|(at, _)| *at == pos));
         saved
     }

@@ -118,7 +118,10 @@ static BUILTIN: std::sync::Mutex<BuiltinCache> = std::sync::Mutex::new(Vec::new(
 /// of the frame that joins a server (or opens a single-player world).
 /// `None` when it is missing or invalid (not cached: a fixed install can
 /// join again).
-pub(super) fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>> {
+pub(super) fn builtin_registries(
+    root: &std::path::Path,
+    profile: sunrise_core::profile::Profile,
+) -> Option<Arc<Builtin>> {
     let mut cache = BUILTIN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, builtin)) = cache.iter().find(|(cached, _)| cached == root) {
         return Some(builtin.clone());
@@ -128,7 +131,7 @@ pub(super) fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>>
             Some(builtin) => builtin,
             // A 1.7.10 root has no `registries.json`: its own tables number
             // the network ids, as the world's server does (`SyncData::era`).
-            None if sunrise_client::sunset17_assets::detect(root) => {
+            None if profile == sunrise_core::profile::Profile::V1_7_10 => {
                 sunrise_client::lan::data::era_builtin(root)
             }
             None => return None,

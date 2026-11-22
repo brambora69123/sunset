@@ -3721,7 +3721,7 @@ pub fn resolved_resources(
                 })
                 .collect::<BTreeMap<_, _>>();
             files.extend(generated_assets);
-            assets_base = ResourceSource::indexed(files);
+            assets_base = ResourceSource::indexed(files).with_profile(assets_base.profile());
         }
     }
     let data_layers: std::sync::Arc<[(String, ResourceSource)]> = loaded
@@ -3750,7 +3750,7 @@ pub fn resolved_resources(
             })
             .collect::<BTreeMap<_, _>>();
         files.extend(changes.clone());
-        assets_base = ResourceSource::indexed(files);
+        assets_base = ResourceSource::indexed(files).with_profile(assets_base.profile());
     }
     let assets = crate::packs::resources(assets_base, &layers)?;
     data.extend(changes.clone());

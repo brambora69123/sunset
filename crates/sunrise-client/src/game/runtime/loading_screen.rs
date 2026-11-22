@@ -499,7 +499,9 @@ pub(super) fn missing_resources(
     let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
     // A prepared 1.7.10 folder has no `sunrise-resources.json` and never will:
     // the era's content export and its extracted assets are the preparation.
-    if crate::sunset17_assets::detect(root) {
+    if sunrise_core::profile::Profile::of_resource_root(root)
+        .is_ok_and(|profile| profile == sunrise_core::profile::Profile::V1_7_10)
+    {
         log::info!(
             "Sunrise: {} is a prepared 1.7.10 folder; loading the era's resource set",
             shown.display()

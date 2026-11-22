@@ -12,7 +12,12 @@ fn era_root_world_open_keeps_the_builtin_damage_table() {
     fs::write(root.join(crate::sunset17_assets::MANIFEST), b"{}").unwrap();
     let resources = HealthResources::load_1_7_10().unwrap();
     let opened = resources
-        .with_packs(&root, &PackOverlay::NONE, false)
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            false,
+            sunrise_core::profile::Profile::V1_7_10,
+        )
         .unwrap();
     assert_eq!(
         opened.damage.id("minecraft:fall"),
@@ -24,7 +29,12 @@ fn era_root_world_open_keeps_the_builtin_damage_table() {
     );
     assert_eq!((opened.ids.health, opened.ids.absorption), (0, 1));
     let reloaded = resources
-        .with_packs(&root, &PackOverlay::NONE, true)
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            true,
+            sunrise_core::profile::Profile::V1_7_10,
+        )
         .unwrap();
     assert_eq!(
         reloaded.damage.id("minecraft:fall"),
@@ -58,17 +68,32 @@ fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
     .unwrap();
     let cached_resources = HealthResources::load(&root).unwrap();
     let first_world = cached_resources
-        .with_packs(&root, &PackOverlay::NONE, false)
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            false,
+            sunrise_core::profile::Profile::Modern,
+        )
         .unwrap();
     let custom = first_world.damage.id("demo:installed").unwrap();
     let vanilla = first_world.damage.id("minecraft:fall").unwrap();
     fs::remove_file(definition).unwrap();
     let reloaded = first_world
-        .with_packs(&root, &PackOverlay::NONE, true)
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            true,
+            sunrise_core::profile::Profile::Modern,
+        )
         .unwrap();
     assert_eq!(reloaded.damage.id("demo:installed"), Some(custom));
     let next_world = cached_resources
-        .with_packs(&root, &PackOverlay::NONE, false)
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            false,
+            sunrise_core::profile::Profile::Modern,
+        )
         .unwrap();
     assert!(next_world.damage.id("demo:installed").is_none());
     assert_eq!(next_world.damage.id("minecraft:fall"), Some(vanilla));
@@ -144,7 +169,12 @@ fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     ];
     let open = resources
         .health
-        .with_packs(&root, &PackOverlay::new(&files), false)
+        .with_packs(
+            &root,
+            &PackOverlay::new(&files),
+            false,
+            sunrise_core::profile::Profile::Modern,
+        )
         .unwrap();
     let id = open.damage.id("demo:heated_air").unwrap();
     let player = || {
@@ -180,7 +210,14 @@ fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     item_rules.bind_damage_catalog(&open.damage);
     assert!(item_rules.damage_tags["minecraft:is_fire"].contains("demo:heated_air"));
     // Disable the pack: the registered type remains, its added tags do not.
-    let reload = open.with_packs(&root, &PackOverlay::NONE, true).unwrap();
+    let reload = open
+        .with_packs(
+            &root,
+            &PackOverlay::NONE,
+            true,
+            sunrise_core::profile::Profile::Modern,
+        )
+        .unwrap();
     assert_eq!(reload.damage.id("demo:heated_air"), Some(id));
     let mut after = player();
     after.status.fire_resistance = true;

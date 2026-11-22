@@ -33,6 +33,7 @@ use std::{
     sync::Arc,
 };
 use sunrise_core::geometry::{Direction, ShapeOp, VoxelShape};
+use sunrise_core::profile::Profile;
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
 const W: usize = 48;
@@ -43,17 +44,6 @@ const FULL: u16 = 1;
 /// so its cells take the emitting path: they emit their chunk's stored answer
 /// (`Chunk::dynamic_emission`), or the state's own light without one.
 const DYNAMIC: u32 = 1 << 20;
-
-/// Whether `registry` is the 1.7.10 content export's: every 1.7.10 state
-/// carries its block metadata (`meta`), air included, while 26.3 splits a
-/// block into typed properties. Such content has 1.7.10's light rules
-/// (`getOpacity`) and no `occlusion.nbt`.
-fn is_1_7_10_content(registry: &BlockRegistry) -> bool {
-    registry
-        .default_state("minecraft:air")
-        .and_then(|air| registry.state(air))
-        .is_some_and(|air| air.properties.get("meta").is_some())
-}
 
 #[derive(Clone, Copy)]
 struct Cell {
@@ -196,11 +186,16 @@ impl LightTables {
         self.info = info;
         self.block_masks = block_masks;
     }
-    /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`; the
-    /// 1.7.10 content root (which exports no occlusion table and follows its
-    /// own light rules) gets the legacy tables instead.
-    pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
-        if is_1_7_10_content(registry) {
+    /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`; a
+    /// 1.7.10 root (which exports no occlusion table and follows its own light
+    /// rules) gets the legacy tables instead.
+    pub fn load(
+        root: &Path,
+        registry: &BlockRegistry,
+        facts: &BlockFacts,
+        profile: Profile,
+    ) -> crate::Result<Self> {
+        if profile == Profile::V1_7_10 {
             return Ok(Self::legacy(facts));
         }
         use sunrise_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
@@ -2146,23 +2141,24 @@ pub(crate) mod tests {
         BlockRegistry::from_facts_json(states.as_bytes()).expect("a registry from facts")
     }
 
-    /// The light model follows the content root: 1.7.10 states carry their
-    /// block metadata (`meta`), air included, which 26.3's typed states do not.
+    /// The light model follows the content root's profile: a 1.7.10 root
+    /// has no `occlusion.nbt` and lights with the era's rules, whether or not
+    /// its states still carry `meta`.
     #[test]
-    fn only_the_1_7_10_content_lights_with_1_7_10_rules() {
-        let row = |name: &str, properties: &str| {
-            format!(r#"["{name}",true,false,"Block{{{name}}}",{{"id":"{name}"{properties}}}]"#)
-        };
-        let legacy = facts_registry(&format!(
-            r#"{{"states":[{}],"defaults":{{"minecraft:air":0}}}}"#,
-            row("minecraft:air", r#","properties":{"meta":"0"}"#),
-        ));
-        let modern = facts_registry(&format!(
-            r#"{{"states":[{}],"defaults":{{"minecraft:air":0}}}}"#,
-            row("minecraft:air", ""),
-        ));
-        assert!(is_1_7_10_content(&legacy));
-        assert!(!is_1_7_10_content(&modern));
+    fn only_the_1_7_10_profile_lights_with_1_7_10_rules() {
+        let facts = emitter_facts();
+        let registry = facts_registry(
+            r#"{"defaults":{"minecraft:air":0},"states":[["air",false,false,"",{"id":"minecraft:air"}]]}"#,
+        );
+        let root = std::env::temp_dir();
+        assert!(
+            LightTables::load(&root, &registry, &facts, Profile::V1_7_10).is_ok(),
+            "a 1.7.10 root lights with the era's tables"
+        );
+        assert!(
+            LightTables::load(&root, &registry, &facts, Profile::Modern).is_err(),
+            "a 26.3 root without occlusion.nbt cannot build its tables"
+        );
     }
     #[test]
     fn bottom_slab_takes_sky_from_above_but_not_through_its_bottom() {

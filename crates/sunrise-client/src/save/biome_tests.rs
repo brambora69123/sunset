@@ -52,7 +52,7 @@ fn a_biome_the_world_lacks_is_saved_back_unchanged() {
     assert!(palette(&saved).contains(&"gone_mod:highland".to_owned()));
     // Reopened without that mod: the column plays as plains...
     let after = load();
-    let loaded = decode(&saved, assets.registry, &after).expect("chunk");
+    let loaded = decode(&saved, assets.registry, &after, assets.profile).expect("chunk");
     // Quart (1, 20, 2) above the bottom at -64: block (4, 16, 8).
     let id = loaded.biome(4, 16, 8);
     assert_eq!(after.name(id), "minecraft:plains");
@@ -63,7 +63,7 @@ fn a_biome_the_world_lacks_is_saved_back_unchanged() {
     assert!(!names.contains(&"minecraft:plains".to_owned()), "{names:?}");
     // Reopened again, still without the mod: the same name, still playing as plains.
     let again = load();
-    let reloaded = decode(&resaved, assets.registry, &again).expect("chunk");
+    let reloaded = decode(&resaved, assets.registry, &again, assets.profile).expect("chunk");
     let id = reloaded.biome(4, 16, 8);
     assert_eq!(again.name(id), "minecraft:plains");
     assert_eq!(again.saved_name(id), "gone_mod:highland");
@@ -106,7 +106,7 @@ fn vanilla_biome_palettes_are_byte_identical_after_reload() {
         );
     }
     let saved = encode(&chunk, assets.registry, &biomes, &Default::default());
-    let loaded = decode(&saved, assets.registry, &biomes).expect("chunk");
+    let loaded = decode(&saved, assets.registry, &biomes, assets.profile).expect("chunk");
     let resaved = encode(&loaded, assets.registry, &biomes, &Default::default());
     let palettes = |root: &NamedTag| {
         let Some(Tag::List(sections)) = root.tag.get("sections") else {

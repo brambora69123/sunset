@@ -201,8 +201,13 @@ fn main() {
             std::array::from_fn(|dz| std::array::from_fn(|dx| chunks[dz][dx].as_ref()));
         let centre = chunks[1][1].as_ref().expect("the centre chunk finished");
         let facts = BlockFacts::load(&root, registry).expect("read the 1.7.10 block facts");
-        let tables =
-            LightTables::load(&root, registry, &facts).expect("read the 1.7.10 light tables");
+        let tables = LightTables::load(
+            &root,
+            registry,
+            &facts,
+            sunrise_core::profile::Profile::V1_7_10,
+        )
+        .expect("read the 1.7.10 light tables");
         let lights = light_chunk(&region, &tables, true);
         let min_y = centre.min_y();
         println!("sky {}", light_line(&lights, min_y, true));

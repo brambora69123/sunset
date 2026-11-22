@@ -317,7 +317,12 @@ mod tests {
             None,
         )?);
         let context = WorkerContext {
-            light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+            light: Arc::new(LightTables::load(
+                &root,
+                assets.registry,
+                &facts,
+                assets.profile,
+            )?),
             tables,
             assets: assets.clone(),
             render,

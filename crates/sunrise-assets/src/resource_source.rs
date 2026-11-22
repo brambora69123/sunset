@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use sunrise_core::profile::Profile;
 
 /// File identity/change stamps for resource-cache keys, following symlinks.
 pub(crate) fn metadata_fingerprint(metadata: &fs::Metadata) -> io::Result<u64> {
@@ -99,8 +100,13 @@ impl Resource {
 /// A folder or an open zip/jar, with the same relative-name lookup and listing.
 /// Clones share the open archive; construct a new source for a resource reload.
 /// Equality and hashing identify that generation, rather than comparing file contents.
+///
+/// The source also carries the [`Profile`] its tree targets, resolved from the
+/// prepared folder's manifest when it was opened as a directory and kept through
+/// pack layers ([`ResourceSource::with_profile`]). A flat index made over a
+/// prepared root takes the root's profile rather than guessing from its files.
 #[derive(Clone)]
-pub struct ResourceSource(Arc<Storage>, Arc<Memo>);
+pub struct ResourceSource(Arc<Storage>, Arc<Memo>, Profile);
 /// What one resource generation computed for its readers, by the type of the value.
 type Memo = std::sync::Mutex<HashMap<std::any::TypeId, Arc<dyn std::any::Any + Send + Sync>>>;
 impl PartialEq for ResourceSource {
@@ -193,6 +199,10 @@ impl ResourceRoot {
     }
     pub fn source(&self) -> &ResourceSource {
         &self.0.source
+    }
+    /// The profile this root's resource tree targets, carried by its sources.
+    pub fn profile(&self) -> Profile {
+        self.0.source.profile()
     }
 }
 impl Default for ResourceSource {
@@ -310,7 +320,21 @@ impl ResourceSource {
         }
     }
     fn from(storage: Storage) -> Self {
-        Self(Arc::new(storage), Arc::default())
+        Self::from_storage(storage, Profile::Modern)
+    }
+    fn from_storage(storage: Storage, profile: Profile) -> Self {
+        Self(Arc::new(storage), Arc::default(), profile)
+    }
+    /// The profile this tree targets, resolved from its prepared folder's
+    /// manifest (or [`Profile::Modern`] without one).
+    pub fn profile(&self) -> Profile {
+        self.2
+    }
+    /// This source with its prepared folder's profile: a flat index over a
+    /// prepared root keeps that root's profile instead of [`Profile::Modern`].
+    #[must_use]
+    pub fn with_profile(self, profile: Profile) -> Self {
+        Self(self.0, self.1, profile)
     }
     pub fn indexed(files: BTreeMap<String, Resource>) -> Self {
         Self::from(Storage::Index(files, BTreeMap::new(), Arc::from([])))
@@ -374,6 +398,7 @@ impl ResourceSource {
         Self(
             Arc::new(Storage::Index(index, layers, sources)),
             self.1.clone(),
+            self.2,
         )
     }
     /// A value computed once for this generation and shared by every clone of the source and
@@ -389,7 +414,8 @@ impl ResourceSource {
             .expect("a value is kept under its own type")
     }
     pub fn directory(root: PathBuf) -> Self {
-        Self::from(Storage::Directory(root))
+        let profile = Profile::of_resource_root(&root).unwrap_or_default();
+        Self::from_storage(Storage::Directory(root), profile)
     }
     pub fn archive(path: &Path) -> io::Result<Self> {
         Ok(Self::opened_archive(Zip::open(path)?))
@@ -413,10 +439,13 @@ impl ResourceSource {
                 "unsafe archive prefix",
             ));
         }
-        Ok(Self::from(Storage::Prefix {
-            source: self.clone(),
-            prefix: format!("{directory}/"),
-        }))
+        Ok(Self::from_storage(
+            Storage::Prefix {
+                source: self.clone(),
+                prefix: format!("{directory}/"),
+            },
+            self.2,
+        ))
     }
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
         if !stays_inside(name) {

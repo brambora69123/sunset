@@ -1106,7 +1106,7 @@ impl MeshTables {
             water_colormap: None,
             mod_tints: mod_tint::ModTints::default(),
             section_geometry: mod_geometry::registered(),
-            era: if sunset17::is_era_registry(assets) {
+            era: if assets.profile == sunrise_core::profile::Profile::V1_7_10 {
                 let emission: Vec<u8> = facts.states.iter().map(|state| state.emission).collect();
                 Some(Arc::new(sunset17::StateTable17::era(
                     assets, render, &emission,

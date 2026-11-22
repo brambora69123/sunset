@@ -801,9 +801,21 @@ mod tests {
         ];
         let open = resources
             .health
-            .with_packs(&root, &PackOverlay::new(&files), false)
+            .with_packs(
+                &root,
+                &PackOverlay::new(&files),
+                false,
+                sunrise_core::profile::Profile::Modern,
+            )
             .unwrap();
-        let reloaded = open.with_packs(&root, &PackOverlay::NONE, true).unwrap();
+        let reloaded = open
+            .with_packs(
+                &root,
+                &PackOverlay::NONE,
+                true,
+                sunrise_core::profile::Profile::Modern,
+            )
+            .unwrap();
         let mut scene = World::test_scene(&assets, &render, 1).unwrap();
         for (source, exhaustion, name) in [
             (LandingDamage::Fall, 0.75, "minecraft:fall"),

@@ -278,7 +278,19 @@ fn main() -> sunrise_client::Result<()> {
             .iter()
             .map(|b| nbt::read_named(b, Limits::default()).unwrap().0)
             .collect();
-        let decode = best_us(&roots, |r| save::decode(r, &registry, &biomes).unwrap(), 15);
+        let decode = best_us(
+            &roots,
+            |r| {
+                save::decode(
+                    r,
+                    &registry,
+                    &biomes,
+                    sunrise_core::profile::Profile::Modern,
+                )
+                .unwrap()
+            },
+            15,
+        );
         println!(
             "encode {encode:.0} us, write {write:.0} us, read {read:.0} us, decode {decode:.0} us, {} bytes, {density} entities/column, 256 chunks",
             bytes.iter().map(Vec::len).sum::<usize>()

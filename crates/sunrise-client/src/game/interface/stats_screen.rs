@@ -399,7 +399,8 @@ impl Game<'_> {
             .into_iter()
             .flat_map(counted)
             .collect();
-        let registry = super::remote::builtin_registries(&self.options.resources);
+        let registry =
+            super::remote::builtin_registries(&self.options.resources, self.pack.profile);
         let order = registry
             .as_deref()
             .and_then(|b| b.get("minecraft:entity_type"));

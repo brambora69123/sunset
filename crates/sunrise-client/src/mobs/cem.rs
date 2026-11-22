@@ -747,7 +747,7 @@ impl Legacy {
     ) {
         // A 1.7.10 root's models are already built on the era's texture layout: the era's own
         // `Model*` classes unwrap the same 64x32 sheets this conversion would halve again.
-        if crate::sunset17_assets::is_source(root) {
+        if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             return;
         }
         // `root` holds vanilla's files too, which never had the old names.

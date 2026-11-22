@@ -186,7 +186,7 @@ impl Game<'_> {
                 // A prepared 1.7.10 root has no 26.3 block behaviours, so its
                 // world tables cannot load yet: the title stays usable and a
                 // world entry says why (`join_world_rest`).
-                if sunrise_client::sunset17_assets::detect(&self.options.resources) {
+                if self.pack.profile == sunrise_core::profile::Profile::V1_7_10 {
                     log::warn!("Sunrise: 1.7.10 world resources are unavailable: {error}");
                     self.res.note_rest_failure(error.to_string());
                 } else {
@@ -258,7 +258,7 @@ impl Game<'_> {
         // A prepared 1.7.10 folder: the era's export carries no 26.3 recipes,
         // so its world tables take empty recipe sources below, and the builtin
         // data maps resolve no registry ids.
-        let era = sunrise_client::sunset17_assets::detect(root);
+        let era = self.pack.profile == sunrise_core::profile::Profile::V1_7_10;
         // The ask of this load, both here and on `/reload`: a native mod
         // recomputes the pack files it contributes every time.
         let mut contributed = Vec::new();
@@ -289,7 +289,7 @@ impl Game<'_> {
         } else {
             &self.res.motion().health
         };
-        let health = base.with_packs(root, &overlay, reload)?;
+        let health = base.with_packs(root, &overlay, reload, self.pack.profile)?;
         // With no pack, `res` holds the tables, unless content mods switched
         // live since it was loaded: their data is in the new root.
         let mut items = Items::load_registry(

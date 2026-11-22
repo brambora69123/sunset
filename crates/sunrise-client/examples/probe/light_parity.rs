@@ -37,7 +37,7 @@ pub fn main() -> sunrise_client::Result<()> {
     let tables = if args.iter().any(|a| a == "--no-shapes") {
         LightTables::new(&facts)
     } else {
-        LightTables::load(&root, assets.registry, &facts)?
+        LightTables::load(&root, assets.registry, &facts, assets.profile)?
     };
     let mut chunks: HashMap<(i32, i32), Chunk> = HashMap::new();
     let mut arrays: HashMap<(i32, i32), Arrays> = HashMap::new();
@@ -58,7 +58,8 @@ pub fn main() -> sunrise_client::Result<()> {
             if tag.get("isLightOn") != Some(&Tag::Byte(1)) {
                 continue;
             }
-            let Some(chunk) = save::decode(&root_tag, assets.registry, &biomes) else {
+            let Some(chunk) = save::decode(&root_tag, assets.registry, &biomes, assets.profile)
+            else {
                 continue;
             };
             let mut light = Arrays::new();

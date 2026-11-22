@@ -1,11 +1,12 @@
 //! The 1.7.10 content export's differences from 26.3, for the behaviour tables.
 //!
-//! A prepared 1.7.10 resource root (`assets-1.7.10.json`, or a registry whose
-//! states carry only `meta`) has 1.7.10's block names (`grass`, `snow`,
-//! `reeds`, ...), one `meta` property per state instead of 26.3's typed
-//! properties (`facing`, `half`, `axis`, ...), and none of the 26.3 data-pack
-//! tables (`block-tags.json`, `cached-collision.nbt`, the fluid tags). This
-//! module supplies what [`super::data`] needs for such a root:
+//! A prepared 1.7.10 resource root (whose profile is
+//! [`Profile::V1_7_10`](sunrise_core::profile::Profile::V1_7_10)) has 1.7.10's
+//! block names (`grass`, `snow`, `reeds`, ...), one `meta` property per state
+//! instead of 26.3's typed properties (`facing`, `half`, `axis`, ...), and none
+//! of the 26.3 data-pack tables (`block-tags.json`, `cached-collision.nbt`, the
+//! fluid tags). This module supplies what [`super::data`] needs for such a
+//! root:
 //!
 //! * [`block_name`] maps every 26.3 block identity [`super::data::Named`]
 //!   looks up to the era's name, or to a documented stand-in where 1.7.10 has
@@ -49,33 +50,9 @@ use super::{
     data::{BlockSet, FluidTags},
     states::{BlockId, StateTable},
 };
-use crate::{
-    compression::invalid,
-    fluid::FluidKind,
-    registry::{BlockRegistry, BlockStateId},
-};
-use std::{collections::HashMap, io, path::Path, sync::Arc};
+use crate::{compression::invalid, fluid::FluidKind, registry::BlockStateId};
+use std::{collections::HashMap, io, sync::Arc};
 use sunrise_core::geometry::{Aabb, Vec3, VoxelShape};
-
-/// The manifest `sunrise-prepare` writes beside a prepared 1.7.10 folder.
-pub(super) const MANIFEST: &str = "assets-1.7.10.json";
-
-/// Whether `root` holds the era's content export: its manifest is there, or
-/// every registry state carries 1.7.10's `meta` property (a client root adds
-/// `level` to the liquid states and `facing` to ladders, so `meta` need not be
-/// the only property).
-pub(super) fn detect(root: &Path, registry: &BlockRegistry) -> bool {
-    root.join(MANIFEST).is_file() || states_carry_meta(registry)
-}
-
-fn states_carry_meta(registry: &BlockRegistry) -> bool {
-    !registry.is_empty()
-        && (0..registry.len()).all(|index| {
-            registry
-                .state(BlockStateId(index as u32))
-                .is_some_and(|state| state.properties.contains_key("meta"))
-        })
-}
 
 /// The era's block name for a 26.3 identity `Named` resolves, or `None` when
 /// the era has the block under its own name and the caller's own lookup does.

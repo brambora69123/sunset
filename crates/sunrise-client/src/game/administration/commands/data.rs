@@ -2336,7 +2336,8 @@ mod loot_table_tests {
             .find(|t| save::number(t.get("x")) == Some(i64::from(pos.0)))
             .unwrap()
             .clone();
-        let reloaded = save::decode(&encoded, registry, game.res.biomes()).unwrap();
+        let reloaded =
+            save::decode(&encoded, registry, game.res.biomes(), game.pack.profile).unwrap();
         let (_, BlockEntity::Chest(slots)) = reloaded
             .block_entities
             .iter()

@@ -914,11 +914,12 @@ impl HealthResources {
         root: &Path,
         overlay: &sunrise_world::loot::PackOverlay<'_>,
         reload: bool,
+        profile: sunrise_core::profile::Profile,
     ) -> Result<Self> {
         // A 1.7.10 root has neither `damage-catalog.json` nor `data/minecraft/damage_type`:
         // the era's damage table is built in, so opening a world keeps it instead of
         // reading the 26.3-only catalog. Its packs cannot add the types either.
-        if crate::sunset17_assets::detect(root) {
+        if profile == sunrise_core::profile::Profile::V1_7_10 {
             return Self::era();
         }
         Ok(Self {

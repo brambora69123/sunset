@@ -1208,9 +1208,10 @@ impl Game<'_> {
     ) -> Result<()> {
         let features = self.enabled_feature_ids().to_vec();
         // A 1.7.10 root has no `registries.json`, recipe folder or synchronized
-        // registry files: the era's server sends only the two world clocks, no tags
-        // or recipes, and the client plays with the tables it loaded itself.
-        let mut sync = if sunrise_client::sunset17_assets::detect(&self.options.resources) {
+        // A 1.7.10 server sends no registries, tags or recipes: it sends its own
+        // network ids and the two world clocks, and the client plays with the
+        // tables it loaded itself.
+        let mut sync = if self.pack.profile == sunrise_core::profile::Profile::V1_7_10 {
             log::info!(
                 "Sunrise: 1.7.10 has no registries.json; the world sends the era's \
                  own network ids, its two world clocks and no other synchronized \

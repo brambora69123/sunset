@@ -121,7 +121,13 @@ fn phantoms_spawn_under_a_glass_roof() {
     let Some(root) = resources() else { return };
     let mut resources = None;
     let mut game = game(&root, &mut resources);
-    let tables = LightTables::load(&root, game.pack.assets.registry, game.res.facts()).unwrap();
+    let tables = LightTables::load(
+        &root,
+        game.pack.assets.registry,
+        game.res.facts(),
+        game.pack.profile,
+    )
+    .unwrap();
 
     // Open night sky.
     let (sky, phantoms) = attempt(&mut game, &tables, None);
@@ -149,7 +155,13 @@ fn no_phantoms_under_a_roof_the_sky_light_does_not_reach() {
     let Some(root) = resources() else { return };
     let mut resources = None;
     let mut game = game(&root, &mut resources);
-    let tables = LightTables::load(&root, game.pack.assets.registry, game.res.facts()).unwrap();
+    let tables = LightTables::load(
+        &root,
+        game.pack.assets.registry,
+        game.res.facts(),
+        game.pack.profile,
+    )
+    .unwrap();
 
     // Stone stops the light; water and ice damp it by a level; a bottom slab
     // is no full cube yet its up face occludes the sky-light column.

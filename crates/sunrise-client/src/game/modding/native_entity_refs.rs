@@ -1389,7 +1389,11 @@ pub(super) mod tests {
         crate::game::api_values::register_game_keys(ids);
         // Rebuilding Parts replaces the entity-type lookup snapshot that content_root
         // completed. Publish the prepared registry order into this new fixture epoch.
-        super::super::mods::register_iterated_registries(&root).unwrap();
+        super::super::mods::register_iterated_registries(
+            &root,
+            sunrise_core::profile::Profile::of_resource_root(&root).unwrap(),
+        )
+        .unwrap();
         // Parts registration also clears particle keys. Restore the load-owned
         // providers as content_root does, rather than relying on a prior test.
         super::super::mods::resolve_particle_providers(

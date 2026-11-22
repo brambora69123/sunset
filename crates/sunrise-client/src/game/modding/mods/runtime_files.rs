@@ -157,7 +157,12 @@ mod tests {
         api_values::install_test_platform();
         mod_platform::__private::install_packages(&inventory, &[]);
         let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
-        crate::game::mods::install_registration_data(&root, files).unwrap();
+        crate::game::mods::install_registration_data(
+            &root,
+            sunrise_core::profile::Profile::of_resource_root(&root).unwrap(),
+            files,
+        )
+        .unwrap();
         mod_platform::testing::with_mods(entries.into(), || {
             mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
                 .unwrap();

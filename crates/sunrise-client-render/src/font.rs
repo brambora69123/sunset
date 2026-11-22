@@ -949,7 +949,8 @@ impl Font {
         // its single font is the ascii sheet and the unicode pages with `glyph_sizes.bin`.
         let mut ids = font_ids(source);
         ids.sort_by_key(|id| id != DEFAULT);
-        let sets = if ids.is_empty() && crate::sunset17_assets::is_source(source) {
+        let sets = if ids.is_empty() && source.profile() == sunrise_core::profile::Profile::V1_7_10
+        {
             vec![(
                 DEFAULT.to_owned(),
                 legacy_1_7_10(source, &font.sheets, pixels, atlas, metrics_only),

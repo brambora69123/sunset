@@ -1794,7 +1794,7 @@ fn content_root_loads_with_every_table() {
 
     crate::collisions::load(&root, new).unwrap();
     crate::models::load_visibility(&root, new).unwrap();
-    crate::light::LightTables::load(&root, new, &facts).unwrap();
+    crate::light::LightTables::load(&root, new, &facts, assets.profile).unwrap();
     crate::motion::MotionResources::load(&root, &assets).unwrap();
     sunrise_world::worldgen::generator::GeneratorData::load(&root.join("worldgen"), new).unwrap();
     assert!(resources.source().contains("assets/ruby/lang/en_us.json"));
@@ -4494,7 +4494,7 @@ fn declared_waterlogged_vegetation_uses_resolved_fluid_for_skylight() {
     let assets = Assets::load(&root).unwrap();
     let registry = assets.registry;
     let facts = BlockFacts::load(&root, registry).unwrap();
-    let tables = LightTables::load(&root, registry, &facts).unwrap();
+    let tables = LightTables::load(&root, registry, &facts, assets.profile).unwrap();
     // VegetationBlock checks fluid emptiness independently of the outline;
     // TransparentBlock always passes skylight. Values come from those rules,
     // not from the generated facts or from another run of the derivation.
@@ -4638,7 +4638,7 @@ fn declared_shapes_reach_render_and_worldgen_occlusion() {
             assert_eq!((state.skylight_down, state.dampening), (false, 1));
         }
     }
-    let tables = LightTables::load(&root, registry, &facts).unwrap();
+    let tables = LightTables::load(&root, registry, &facts, assets.profile).unwrap();
     let partial_open = registry.default_state("testmod:partial_open").unwrap();
     for (roof, below) in [(partial, 0), (slab, 0), (partial_open, 15)] {
         // A sealed room with a bottom-half roof: its open top admits sky,

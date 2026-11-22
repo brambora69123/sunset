@@ -21,7 +21,7 @@ pub(super) fn load_world_rest(
     // types, entity models, animation or creative tables. Each that has an
     // era equivalent loads from the export; the rest take an empty default,
     // logged where it is taken.
-    let era = sunrise_client::sunset17_assets::detect(root);
+    let era = resource_root.profile() == sunrise_core::profile::Profile::V1_7_10;
     let facts = resources.facts();
     let biomes = resources.biomes();
     let threads = resources.threads();

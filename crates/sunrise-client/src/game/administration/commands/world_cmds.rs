@@ -2336,7 +2336,12 @@ mod datapack_damage_tests {
         game.health_resources = game
             .motion
             .health
-            .with_packs(&root, &PackOverlay::new(&files), false)
+            .with_packs(
+                &root,
+                &PackOverlay::new(&files),
+                false,
+                sunrise_core::profile::Profile::Modern,
+            )
             .unwrap();
         assert!(game.motion.health.damage.id("dmgtest:zap").is_none());
     }

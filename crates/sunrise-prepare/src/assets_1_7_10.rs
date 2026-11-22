@@ -38,7 +38,7 @@ pub const DEFAULT_JAR: &str = ".local/minecraft/1.7.10/named/client.jar";
 pub const DEFAULT_DIR: &str = ".local/sunrise-client/1.7.10";
 
 /// The extraction's manifest, beside the content export in the prepared folder.
-pub const MANIFEST: &str = "assets-1.7.10.json";
+pub const MANIFEST: &str = sunrise_core::profile::ERA_MANIFEST;
 
 /// [`MANIFEST`]'s layout: bump it when a field's meaning changes, so a later run re-extracts
 /// instead of trusting an older file.

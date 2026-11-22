@@ -6,6 +6,7 @@ impl Items {
     /// tag membership.
     pub fn tags_only(root: &Path, overlay: &PackOverlay, defaults: &ItemDefaults) -> Result<Self> {
         let mut items = Self {
+            profile: sunrise_core::profile::Profile::of_resource_root(root)?,
             items: HashMap::new(),
             block_items: Default::default(),
             component_registry: component_registry(

@@ -921,7 +921,12 @@ pub fn main() -> sunrise_client::Result<()> {
     ))?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::load(root, registry, &facts, &PackOverlay::NONE, &defaults)?;
-    let tables = LightTables::load(root, registry, &facts)?;
+    let tables = LightTables::load(
+        root,
+        registry,
+        &facts,
+        sunrise_core::profile::Profile::of_resource_root(root).unwrap_or_default(),
+    )?;
     let collision = std::sync::Arc::new(collisions::load(root, registry)?);
     let suffocation =
         sunrise_client::mobs::suffocation::bind(collision.clone(), &motion.causes_suffocation)?;

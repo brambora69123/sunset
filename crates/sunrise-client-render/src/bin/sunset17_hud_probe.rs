@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| std::env::var_os("SUNSET_1_7_CONTENT").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(sunset17_assets::DEFAULT_DIR));
     let source = ResourceSource::directory(root.clone());
-    let atlas = (sunset17_assets::detect(&root) || sunset17_assets::is_source(&source))
+    let atlas = (source.profile() == sunrise_core::profile::Profile::V1_7_10)
         .then(|| HudAtlas::build(&source))
         .transpose()?;
     let language = sunset17_assets::Assets::load(&root)
