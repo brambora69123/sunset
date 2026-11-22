@@ -641,8 +641,12 @@ impl Game<'_> {
         }
         state
     }
-    /// `GuiGraphics.renderItem(player, level, stack, x, y, 0)`.
+    /// `GuiGraphics.renderItem(player, level, stack, x, y, 0)`, or 1.7.10's
+    /// `ItemRenderer.renderGuiItem` on the era's content root.
     pub(super) fn draw_item_model(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+        if self.era_ui() && self.draw_era_item(batch, stack, x, y) {
+            return;
+        }
         let owner = self.player_owner(Some(stack));
         let state = self.resolve_item(stack, DisplayContext::Gui, Some(&owner), 0);
         item_render::gui::draw(
@@ -657,6 +661,29 @@ impl Game<'_> {
             self.glint_frame.speed,
             self.glint_frame.alpha,
         );
+    }
+    /// 1.7.10's GUI item: [`items_1_7_10::paint`] over the era's own sprites.
+    /// False for an item the era registry does not have.
+    pub(super) fn draw_era_item(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let Some(id) = sunrise_client::items_1_7_10::item_id(&stack.item) else {
+            return false;
+        };
+        sunrise_client::items_1_7_10::paint(
+            batch,
+            &self.gui.atlas,
+            id,
+            stack.damage as u16,
+            x,
+            y,
+            self.gui_ticks.max(0) as u64,
+        );
+        true
     }
     /// An item under `pose` (GUI pixels), cut by no slot and with a depth of its own: what
     /// `DrawContext::model_3d` draws a turned item with.

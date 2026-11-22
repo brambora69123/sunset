@@ -107,6 +107,9 @@ pub struct Creative {
     lines_cache: Mutex<Option<(u64, Arc<[Vec<String>]>)>>,
     /// The packs' Polytone creative tab modifiers, applied by `rebuild`.
     pack: Vec<crate::polytone_creative_tabs::TabModifier>,
+    /// The tabs are 1.7.10's static `addItems` lists (`set_era_tabs`), not
+    /// the modern catalog's projection.
+    era: bool,
 }
 /// The same registries a vanilla client finishes configuring, in network ID order.
 /// Known-pack entries have already been filled from local resources by configuration.
@@ -232,9 +235,24 @@ pub struct Names {
     item_names: HashMap<String, serde_json::Value>,
     /// The block registry, which says whether an item is a block's (`Item.Properties.useBlockDescriptionPrefix`).
     blocks: Option<&'static sunrise_world::registry::BlockRegistry>,
+    /// The content root is 1.7.10's: names come from the era's `en_US.lang`
+    /// (`tile.<name>.name`, `item.<name>.name`), never from 26.3's keys.
+    era: bool,
 }
 impl Names {
     pub fn load(root: &sunrise_assets::resource_source::ResourceSource) -> Self {
+        Self::load_for(root, root.profile())
+    }
+    /// [`Names::load`] for a resource root whose profile the caller already
+    /// read (the pack's own, which a layered source may not carry).
+    pub fn load_for(
+        root: &sunrise_assets::resource_source::ResourceSource,
+        profile: sunrise_core::profile::Profile,
+    ) -> Self {
+        // A layered pack stack over a 1.7.10 root carries the era's `.lang`;
+        // its source's profile can be the overlay's default.
+        let lang_file = root.read("assets/minecraft/lang/en_US.lang").ok();
+        let era = profile == sunrise_core::profile::Profile::V1_7_10 || lang_file.is_some();
         let read = |namespace: &str| {
             root.read(&format!("assets/{namespace}/lang/en_us.json"))
                 .ok()
@@ -242,6 +260,20 @@ impl Names {
                 .unwrap_or_default()
         };
         let mut map = read("minecraft");
+        // 1.7.10 has no `en_us.json`: its one language file is the era's
+        // `en_US.lang`, which the prepared root carries.
+        if let Some(bytes) = lang_file {
+            let text = String::from_utf8_lossy(&bytes);
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    map.insert(key.to_owned(), value.to_owned());
+                }
+            }
+        }
         // Content mods' names (docs/modpacks.md); none in a vanilla root.
         for namespace in root
             .namespaces("assets")
@@ -254,6 +286,7 @@ impl Names {
             map,
             item_names: HashMap::new(),
             blocks: None,
+            era,
         }
     }
     /// Keep each item's default `minecraft:item_name` component from the items' prototypes:
@@ -288,6 +321,12 @@ impl Names {
     }
     pub fn item(&self, id: &str) -> String {
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+        if self.era
+            && namespace == "minecraft"
+            && let Some(name) = era_stack_name_in(id, 0, &self.lookup())
+        {
+            return name;
+        }
         self.map
             .get(&format!("item.{namespace}.{path}"))
             .or_else(|| self.map.get(&format!("block.{namespace}.{path}")))
@@ -295,28 +334,279 @@ impl Names {
             .unwrap_or_else(|| path.replace('_', " "))
     }
     /// An item's display name in the selected language: `item.*` then
-    /// `block.*`, then the pinned English map (`Names::item`).
+    /// `block.*`, then the pinned English map (`Names::item`). A 1.7.10 root
+    /// reads the era's `tile.*`/`item.*` keys, by the stack's metadata.
     pub fn display_item(&self, id: &str) -> String {
+        self.display_stack_item(id, 0)
+    }
+    /// [`Self::display_item`] with the item metadata a 1.7.10 stack carries
+    /// (wool's dye, a slab's variant, a potion's damage).
+    pub fn display_stack(&self, stack: &ItemStack) -> String {
+        self.display_stack_item(&stack.item, stack.damage)
+    }
+    fn display_stack_item(&self, id: &str, damage: u32) -> String {
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
-        if let Some(lang) = crate::lang::current() {
-            for prefix in ["item", "block"] {
-                if let Some(name) = lang.get(&format!("{prefix}.{namespace}.{path}")) {
-                    return name.to_owned();
-                }
-            }
+        if self.era
+            && namespace == "minecraft"
+            && let Some(name) = era_stack_name_in(id, damage, &self.lookup())
+        {
+            return name;
+        }
+        if let Some(name) = self.lookup()(&format!("item.{namespace}.{path}"))
+            .or_else(|| self.lookup()(&format!("block.{namespace}.{path}")))
+        {
+            return name;
         }
         self.item(id)
     }
+    /// The era's language keys: the selected language's, then the prepared
+    /// root's own `en_US.lang` in the pinned English map.
+    fn lookup(&self) -> impl Fn(&str) -> Option<String> + '_ {
+        move |key| {
+            crate::lang::current()
+                .and_then(|lang| lang.get(key).map(str::to_owned))
+                .or_else(|| self.map.get(key).cloned())
+        }
+    }
     /// A translation key's text in the selected language, else the pinned
-    /// English map (`HoverName` and tooltip keys such as potion names).
+    /// English map (`HoverName` and tooltip keys such as potion names). On a
+    /// 1.7.10 root, the engine's `item.minecraft.<id>` and
+    /// `block.minecraft.<id>` keys read the era's `item.<key>.name` and
+    /// `tile.<key>.name`.
     pub fn display_get(&self, key: &str) -> Option<String> {
-        crate::lang::current()
-            .and_then(|lang| lang.get(key).map(str::to_owned))
-            .or_else(|| self.get(key).map(str::to_owned))
+        if self.era
+            && let Some(name) = era_key_name_in(key, &self.lookup())
+        {
+            return Some(name);
+        }
+        self.lookup()(key)
     }
     pub fn get(&self, key: &str) -> Option<&str> {
         self.map.get(key).map(String::as_str)
     }
+}
+
+/// `DyeItem.TRANSLATION_KEYS`: the suffix of a dyed block's name
+/// (`tile.cloth.white.name`), indexed by the block metadata.
+const DYE_TRANSLATION_KEYS: [&str; 16] = [
+    "black",
+    "red",
+    "green",
+    "brown",
+    "blue",
+    "purple",
+    "cyan",
+    "silver",
+    "gray",
+    "pink",
+    "lime",
+    "yellow",
+    "lightBlue",
+    "magenta",
+    "orange",
+    "white",
+];
+/// `PlanksBlock.VARIANTS`.
+const PLANKS_VARIANTS: [&str; 6] = ["oak", "spruce", "birch", "jungle", "acacia", "big_oak"];
+/// `LogBlock.VARIANTS`.
+const LOG_VARIANTS: [&str; 4] = ["oak", "spruce", "birch", "jungle"];
+/// `Log2Block.VARIANTS`.
+const LOG2_VARIANTS: [&str; 2] = ["acacia", "big_oak"];
+/// `LeavesBlock.VARIANTS`.
+const LEAVES_VARIANTS: [&str; 4] = ["oak", "spruce", "birch", "jungle"];
+/// `Leaves2Block.VARIANTS`.
+const LEAVES2_VARIANTS: [&str; 2] = ["acacia", "big_oak"];
+/// `StoneSlabBlock.VARIANTS`.
+const STONE_SLAB_VARIANTS: [&str; 8] = [
+    "stone",
+    "sand",
+    "wood",
+    "cobble",
+    "brick",
+    "smoothStoneBrick",
+    "netherBrick",
+    "quartz",
+];
+/// `WoodenSlabBlock.VARIANTS`.
+const WOOD_SLAB_VARIANTS: [&str; 6] = ["oak", "spruce", "birch", "jungle", "acacia", "big_oak"];
+/// `TallPlantBlock`'s `PlantBlockItem.setNames`.
+const TALLGRASS_VARIANTS: [&str; 3] = ["shrub", "grass", "fern"];
+/// `DoublePlantBlock.VARIANTS`.
+const DOUBLE_PLANT_VARIANTS: [&str; 6] =
+    ["sunflower", "syringa", "grass", "fern", "rose", "paeonia"];
+/// `AnvilBlock.VARIANTS`.
+const ANVIL_VARIANTS: [&str; 3] = ["intact", "slightlyDamaged", "veryDamaged"];
+/// `FishItem$Type` keys, by metadata.
+const FISH_TYPES: [(u32, &str, bool); 4] = [
+    (0, "cod", true),
+    (1, "salmon", true),
+    (2, "clownfish", false),
+    (3, "pufferfish", false),
+];
+/// `SkullItem.SKULL_TYPES`.
+const SKULL_TYPES: [&str; 5] = ["skeleton", "wither", "zombie", "char", "creeper"];
+
+/// A 1.7.10 stack's name (`Item.getItemStackDisplayName`): the era's
+/// `tile.<key>.name` or `item.<key>.name`, by the item's class and metadata,
+/// else the era name capitalised (`record_13` is `Record 13`). `None` for an
+/// id the era has no item for.
+pub fn era_stack_name(id: &str, damage: u32) -> Option<String> {
+    let lang = crate::lang::current();
+    era_stack_name_in(id, damage, &|key| {
+        lang.as_ref()
+            .and_then(|lang| lang.get(key))
+            .map(str::to_owned)
+    })
+}
+
+/// [`era_stack_name`] with the translation lookup given: the era's language
+/// the client selected, or the prepared root's own `en_US.lang`.
+fn era_stack_name_in(
+    id: &str,
+    damage: u32,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let path = id.strip_prefix("minecraft:")?;
+    let def = sunset_1_7_items::id_of(path)?;
+    let key = era_name_key(def, damage);
+    if let Some(name) = lookup(&format!("{key}.name")) {
+        return Some(name);
+    }
+    let base = def.translation_key();
+    if base != key
+        && let Some(name) = lookup(&format!("{base}.name"))
+    {
+        return Some(name);
+    }
+    Some(capitalised(def.name))
+}
+
+/// The era translation key of a stack, `Item.getTranslationKey(stack)` for
+/// the classes that read the metadata.
+fn era_name_key(def: &sunset_1_7_items::ItemDef, damage: u32) -> String {
+    use sunset_1_7_items::{BlockItemKind, ItemKind};
+
+    let base = if def.id == 175 {
+        "tile.doublePlant".to_owned()
+    } else {
+        def.translation_key()
+    };
+    let suffix = match def.kind {
+        ItemKind::Block(BlockItemKind::Colored) => {
+            Some(DYE_TRANSLATION_KEYS[(!damage & 15) as usize])
+        }
+        ItemKind::Block(BlockItemKind::Variant) => match def.id {
+            5 => Some(variant(&PLANKS_VARIANTS, damage)),
+            17 => Some(variant(&LOG_VARIANTS, damage)),
+            162 => Some(variant(&LOG2_VARIANTS, damage)),
+            _ => None,
+        },
+        ItemKind::Block(BlockItemKind::Leaves) if def.id == 18 => {
+            Some(variant(&LEAVES_VARIANTS, damage))
+        }
+        ItemKind::Block(BlockItemKind::Leaves) => Some(variant(&LEAVES2_VARIANTS, damage)),
+        ItemKind::Block(BlockItemKind::Slab) if def.id == 43 || def.id == 44 => {
+            Some(variant(&STONE_SLAB_VARIANTS, damage))
+        }
+        ItemKind::Block(BlockItemKind::Slab) => Some(variant(&WOOD_SLAB_VARIANTS, damage)),
+        ItemKind::Block(BlockItemKind::Plant) => Some(variant(&TALLGRASS_VARIANTS, damage)),
+        ItemKind::Block(BlockItemKind::Anvil) => Some(variant(&ANVIL_VARIANTS, damage)),
+        ItemKind::Block(BlockItemKind::Bush) => Some(variant(&DOUBLE_PLANT_VARIANTS, damage & 7)),
+        ItemKind::Plain if def.id == 263 => Some(if damage == 1 { "charcoal" } else { "coal" }),
+        ItemKind::Plain if def.id == 351 => Some(DYE_TRANSLATION_KEYS[damage.min(15) as usize]),
+        ItemKind::Plain if def.id == 397 => Some(variant(&SKULL_TYPES, damage)),
+        ItemKind::Food { .. } if def.id == 349 || def.id == 350 => {
+            let ty = FISH_TYPES[(damage & 3) as usize];
+            let cooked = def.id == 350 && ty.2;
+            return format!(
+                "item.fish.{}.{}",
+                ty.1,
+                if cooked { "cooked" } else { "raw" }
+            );
+        }
+        _ => None,
+    };
+    match suffix {
+        Some(suffix) => format!("{base}.{suffix}"),
+        None => base,
+    }
+}
+
+fn variant<T: Copy>(table: &[T], index: u32) -> T {
+    table[(index as usize).min(table.len() - 1)]
+}
+
+/// The era name of the engine's `item.minecraft.<id>` / `block.minecraft.<id>`
+/// key: `item.<era name>.name` for plain items, `tile.<block name>.name` for
+/// block items.
+#[cfg(test)]
+fn era_key_name(key: &str) -> Option<String> {
+    let lang = crate::lang::current();
+    era_key_name_in(key, &|key| {
+        lang.as_ref()
+            .and_then(|lang| lang.get(key))
+            .map(str::to_owned)
+    })
+}
+
+/// [`era_key_name`] with the translation lookup given.
+fn era_key_name_in(key: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let path = key
+        .strip_prefix("item.minecraft.")
+        .or_else(|| key.strip_prefix("block.minecraft."))?;
+    era_stack_name_in(&format!("minecraft:{path}"), 0, lookup)
+}
+
+/// `StringUtils.capitalize`-like: the era name's words, each capitalised
+/// (`cobblestone` -> `Cobblestone`, `record_13` -> `Record 13`).
+fn capitalised(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for (i, word) in name.split('_').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.extend(chars);
+        }
+    }
+    out
+}
+
+/// `CreativeModeTab`s as the 1.7.10 screen's tabs (`creative_1_7_10`): the
+/// era's ten item tabs, each with the era registry's stacks in `addItems`
+/// order. A tab entry whose item the era registry does not have is left out.
+pub fn era_tabs() -> Vec<Tab> {
+    crate::creative_1_7_10::Tab17::ALL
+        .into_iter()
+        .map(|tab| Tab {
+            id: format!("minecraft:{}", tab.name()),
+            title: tab.title_key().to_owned(),
+            icon: crate::items_1_7_10::item_name(tab.icon().0)
+                .unwrap_or("minecraft:stone")
+                .to_owned(),
+            items: tab
+                .items()
+                .iter()
+                .filter_map(|&(id, meta)| {
+                    Some(ItemStack {
+                        item: Arc::from(crate::items_1_7_10::item_name(id)?),
+                        count: 1,
+                        damage: u32::from(meta),
+                        extra: None,
+                    })
+                })
+                .collect(),
+            top: tab.top_row(),
+            column: tab.column() as u32,
+            search: false,
+            inventory: false,
+            hotbar: false,
+            page: 0,
+            name: None,
+        })
+        .collect()
 }
 
 /// `CreativeModeTabs`' key for an exported tab id (`itemGroup.*`); the
@@ -494,6 +784,7 @@ impl Creative {
             shown: Mutex::new(None),
             lines_cache: Mutex::new(None),
             pack: Vec::new(),
+            era: false,
         };
         creative.project();
         Ok(creative)
@@ -505,6 +796,9 @@ impl Creative {
 
     /// Project the complete canonical lists onto the UI, retaining client-only presentation.
     fn project(&mut self) {
+        if self.era {
+            return;
+        }
         let mut search = Vec::new();
         let mut tabs = Vec::new();
         for (i, recipe) in self.catalog.tabs().iter().enumerate() {
@@ -706,6 +1000,18 @@ impl Creative {
             .iter()
             .position(|s| s.same_item_same_components(stack))
             .or_else(|| items.iter().position(|s| s.item == stack.item))
+    }
+    /// The screen's tabs as the era's (`creative::era_tabs`): 1.7.10 has no
+    /// search or survival-inventory tab, only its ten item tabs.
+    pub fn set_era_tabs(&mut self, tabs: Vec<Tab>) {
+        self.selected_id = tabs.first().map_or_else(String::new, |tab| tab.id.clone());
+        self.tabs = tabs;
+        self.page = 0;
+        self.scroll = 0.0;
+        self.search_items.clear();
+        self.search_index.clear();
+        self.era = true;
+        self.forget_items();
     }
     /// The tabs without their stacks: what the screen draws of them each frame.
     pub fn tab_headers(&self) -> Vec<Tab> {
@@ -2551,6 +2857,8 @@ mod tests {
 
 #[cfg(test)]
 mod source_name_tests {
+    use super::*;
+
     #[test]
     fn item_names_read_selected_namespace_resources_without_files() {
         use sunrise_assets::resource_source::{Resource, ResourceSource};
@@ -2560,5 +2868,145 @@ mod source_name_tests {
         )]));
         let names = super::Names::load(&source);
         assert_eq!(names.item("reader:widget"), "Selected widget");
+    }
+
+    #[test]
+    fn an_era_profile_names_an_item_even_without_its_lang() {
+        use sunrise_assets::resource_source::ResourceSource;
+        let names = super::Names::load_for(
+            &ResourceSource::default(),
+            sunrise_core::profile::Profile::V1_7_10,
+        );
+        assert_eq!(
+            names.display_get("item.minecraft.stick").as_deref(),
+            Some("Stick")
+        );
+        assert_eq!(names.display_item("minecraft:cobblestone"), "Cobblestone");
+    }
+
+    #[test]
+    fn a_1_7_10_root_reads_its_lang_file_for_item_names() {
+        use sunrise_assets::resource_source::{Resource, ResourceSource};
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([(
+            "assets/minecraft/lang/en_US.lang".into(),
+            Resource::bytes(
+                b"tile.stone.name=Stone\ntile.stonebrick.name=Cobblestone\n\
+                  tile.cloth.white.name=White Wool\nitem.stick.name=Stick\n"
+                    .to_vec(),
+            ),
+        )]))
+        .with_profile(sunrise_core::profile::Profile::V1_7_10);
+        let names = super::Names::load(&source);
+        assert_eq!(names.display_item("minecraft:stone"), "Stone");
+        assert_eq!(names.display_item("minecraft:cobblestone"), "Cobblestone");
+        assert_eq!(
+            names.display_stack(&ItemStack {
+                item: Arc::from("minecraft:wool"),
+                count: 1,
+                damage: 0,
+                extra: None,
+            }),
+            "White Wool"
+        );
+        assert_eq!(
+            names.display_get("item.minecraft.stick").as_deref(),
+            Some("Stick")
+        );
+    }
+}
+
+#[cfg(test)]
+mod era_name_tests {
+    use super::*;
+
+    fn language() -> lang::Language {
+        lang::Language::of(
+            "en_us",
+            [
+                ("tile.stone.name", "Stone"),
+                ("tile.stonebrick.name", "Cobblestone"),
+                ("tile.cloth.white.name", "White Wool"),
+                ("tile.cloth.black.name", "Black Wool"),
+                ("tile.wood.spruce.name", "Spruce Wood Planks"),
+                ("tile.stoneSlab.cobble.name", "Cobblestone Slab"),
+                ("tile.tallgrass.fern.name", "Fern"),
+                ("tile.doublePlant.sunflower.name", "Sunflower"),
+                ("tile.anvil.veryDamaged.name", "Very Damaged Anvil"),
+                ("tile.leaves.spruce.name", "Spruce Leaves"),
+                ("item.stick.name", "Stick"),
+                ("item.dyePowder.white.name", "Bone Meal"),
+                ("item.fish.cod.raw.name", "Raw Fish"),
+                ("item.skull.zombie.name", "Zombie Head"),
+            ]
+            .map(|(key, value)| (key.to_owned(), value.to_owned())),
+        )
+    }
+
+    #[test]
+    fn era_names_read_tile_and_item_keys_by_metadata() {
+        lang::scoped(language(), || {
+            let name = |id, damage| era_stack_name(id, damage).unwrap();
+            assert_eq!(name("minecraft:stone", 0), "Stone");
+            assert_eq!(name("minecraft:cobblestone", 0), "Cobblestone");
+            assert_eq!(name("minecraft:stick", 0), "Stick");
+            // A `ColoredBlockItem` inverts its metadata for the block's dye name.
+            assert_eq!(name("minecraft:wool", 0), "White Wool");
+            assert_eq!(name("minecraft:wool", 15), "Black Wool");
+            assert_eq!(name("minecraft:planks", 1), "Spruce Wood Planks");
+            assert_eq!(name("minecraft:stone_slab", 3), "Cobblestone Slab");
+            assert_eq!(name("minecraft:tallgrass", 2), "Fern");
+            assert_eq!(name("minecraft:double_plant", 0), "Sunflower");
+            assert_eq!(name("minecraft:anvil", 2), "Very Damaged Anvil");
+            assert_eq!(name("minecraft:leaves", 1), "Spruce Leaves");
+            assert_eq!(name("minecraft:dye", 15), "Bone Meal");
+            assert_eq!(name("minecraft:fish", 0), "Raw Fish");
+            assert_eq!(name("minecraft:skull", 2), "Zombie Head");
+        });
+    }
+
+    #[test]
+    fn a_missing_key_falls_back_to_the_era_name_capitalised() {
+        lang::scoped(lang::Language::of("en_us", []), || {
+            assert_eq!(
+                era_stack_name("minecraft:record_13", 0).unwrap(),
+                "Record 13"
+            );
+            assert_eq!(
+                era_stack_name("minecraft:cobblestone", 0).unwrap(),
+                "Cobblestone"
+            );
+            assert_eq!(era_stack_name("minecraft:wool", 4).unwrap(), "Wool");
+            assert_eq!(era_stack_name("minecraft:not_an_item", 0), None);
+        });
+    }
+
+    #[test]
+    fn the_engine_name_keys_read_the_eras_names() {
+        lang::scoped(language(), || {
+            assert_eq!(era_key_name("item.minecraft.stone").unwrap(), "Stone");
+            assert_eq!(
+                era_key_name("block.minecraft.cobblestone").unwrap(),
+                "Cobblestone"
+            );
+            assert_eq!(era_key_name("item.minecraft.not_an_item"), None);
+            assert_eq!(era_key_name("effect.minecraft.speed"), None);
+        });
+    }
+
+    #[test]
+    fn era_tabs_are_the_eras_ten_item_tabs() {
+        let tabs = era_tabs();
+        assert_eq!(tabs.len(), 10);
+        let counts: Vec<usize> = tabs.iter().map(|tab| tab.items.len()).collect();
+        assert_eq!(counts, [141, 103, 26, 12, 56, 28, 33, 45, 65, 45]);
+        assert_eq!(tabs[0].id, "minecraft:buildingBlocks");
+        assert_eq!(tabs[5].id, "minecraft:food");
+        assert_eq!(tabs[5].title, "itemGroup.food");
+        assert_eq!(tabs[5].items[0].item.as_ref(), "minecraft:apple");
+        assert_eq!(tabs[0].items[0].item.as_ref(), "minecraft:stone");
+        assert_eq!(tabs[0].items[0].damage, 0);
+        // The grids the era draws are the menu's own; no search or inventory tab.
+        assert!(tabs.iter().all(|tab| !tab.search && !tab.inventory));
+        assert_eq!(tabs.iter().filter(|tab| tab.top).count(), 5);
     }
 }

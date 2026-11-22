@@ -14,6 +14,7 @@
 use super::*;
 use std::sync::OnceLock;
 use sunrise_client::command::args::GameMode;
+use sunrise_client::creative_1_7_10::{self as era_creative, CreativeGrid17, Tab17};
 use sunrise_client::hud_1_7_10::{self, HotbarItem17, Hud17, HudLayout17, HudPlayer17, HudState17};
 use sunrise_client::screens_1_7_10::{
     self as era_screens, FurnaceProgress17, MenuView17, Screen17, Slot17, SlotRole17, SlotSource17,
@@ -230,6 +231,144 @@ impl Game<'_> {
         let resolve = |key: &str| self.translate_with_fallback(key, era_label_fallback(key));
         let text_width = |text: &str| self.gui.atlas.font.width(text) as i32;
         era_screens::paint(batch, &self.gui.atlas, &menu, &resolve, &text_width);
+    }
+
+    /// The era creative screen: the ten item tabs, the 9x5 page, the
+    /// scrollbar and the player's hotbar row, from [`era_creative::paint`].
+    pub(super) fn draw_era_creative(&mut self, batch: &mut HudBatch) {
+        screen_info::begin_container("creative");
+        let (ox, oy) = Self::creative_origin(batch);
+        let selected = self.creative_screen.selected_index();
+        let tab = Tab17::ALL.get(selected).copied().unwrap_or(Tab17::ALL[0]);
+        let grid = CreativeGrid17 {
+            tab,
+            items: tab.items(),
+            scroll: self.creative_screen.scroll,
+        };
+        self.render_transparent_background("creative", batch);
+        let title = self.era_tab_title(tab);
+        era_creative::paint(
+            batch,
+            &self.gui.atlas,
+            &grid,
+            ox,
+            oy,
+            &title,
+            self.gui_ticks.max(0) as u64,
+        );
+        let hovered = self.slot_at(batch, self.cursor.0, self.cursor.1);
+        if let Some(slot) = hovered.filter(|slot| *slot >= era_creative::DISPLAY)
+            && self.era_creative_stack(slot).is_some()
+        {
+            let index = slot - era_creative::DISPLAY;
+            let (sx, sy) = CreativeGrid17::slot_position(index);
+            self.draw_era_slot_highlight(batch, ox + sx as f32, oy + sy as f32);
+        }
+        // `CreativePlayerMenu`'s hotbar row.
+        let drag = self.drag_view();
+        for slot in 0..9 {
+            let (sx, sy) = CreativeGrid17::hotbar_position(slot);
+            self.draw_slot_item(
+                batch,
+                drag.as_ref(),
+                slot,
+                &self.inventory[slot],
+                ox + sx as f32,
+                oy + sy as f32,
+            );
+            if hovered == Some(slot) {
+                self.draw_era_slot_highlight(batch, ox + sx as f32, oy + sy as f32);
+            }
+        }
+        let browser_tip = self.draw_mod_browser(batch);
+        self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Foreground);
+        self.draw_carried(batch);
+        // `CreativeInventoryScreen.checkTabHovering` after the slot tooltips.
+        if let Some(hovered_tab) =
+            Tab17::at((self.cursor.0 - ox) as i32, (self.cursor.1 - oy) as i32)
+        {
+            let title = self.era_tab_title(hovered_tab);
+            self.tooltip(batch, &title, self.cursor.0, self.cursor.1);
+        } else if let Some(slot) = hovered {
+            let stack = if slot >= era_creative::DISPLAY {
+                self.era_creative_stack(slot)
+            } else {
+                self.inventory[slot].clone()
+            };
+            if let Some(stack) = stack
+                && self.tooltip_with_carried(&stack)
+            {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
+        }
+        if let Some(tooltip) = browser_tip {
+            self.draw_mod_browser_tooltip(batch, tooltip);
+        }
+    }
+
+    /// The stack one of an era item tab's display slots shows.
+    fn era_creative_stack(&self, slot: usize) -> Option<ItemStack> {
+        let first = self.creative_screen.first_row(&self.pack.names);
+        self.creative_screen
+            .shown(&self.pack.names, first * 9 + slot - era_creative::DISPLAY)
+    }
+
+    /// `CreativeModeTab.getDisplayName`: the era's `itemGroup.*` text.
+    pub(super) fn era_tab_title(&self, tab: Tab17) -> String {
+        let fallback = match tab {
+            Tab17::BuildingBlocks => "Building Blocks",
+            Tab17::Decorations => "Decoration Blocks",
+            Tab17::Redstone => "Redstone",
+            Tab17::Transportation => "Transportation",
+            Tab17::Misc => "Miscellaneous",
+            Tab17::Food => "Foodstuffs",
+            Tab17::Tools => "Tools",
+            Tab17::Combat => "Combat",
+            Tab17::Brewing => "Brewing",
+            Tab17::Materials => "Materials",
+        };
+        self.translate_with_fallback(tab.title_key(), fallback)
+    }
+
+    /// A click on the era creative screen: its tab strip, its scrollbar and
+    /// then the item grid and hotbar row through the menu's own click.
+    pub(super) fn click_era_creative(&mut self, right: bool) {
+        if self.mod_browser_press(right) {
+            return;
+        }
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
+        let batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+        let (ox, oy) = Self::creative_origin(&batch);
+        let (cx, cy) = self.cursor;
+        // `mouseReleased` on the tab strip: a tab outside the panel wins over
+        // the outside-the-window slot.
+        if let Some(tab) = Tab17::at((cx - ox) as i32, (cy - oy) as i32)
+            && let Some(index) = Tab17::ALL.iter().position(|candidate| *candidate == tab)
+        {
+            select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, index);
+            self.build_screen();
+            self.inv_drag = None;
+            self.last_inv_click = None;
+            return;
+        }
+        // The scrollbar's track is part of the panel; holding it drags the
+        // thumb (`mouseDragged`).
+        if !right
+            && self
+                .creative_screen
+                .press_scrollbar(cx - ox, cy - oy, &self.pack.names)
+        {
+            return;
+        }
+        if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
+            self.inventory_press(right);
+        }
     }
 
     /// `InventoryMenuScreen.render`'s hovered slot: a half-alpha white fill
