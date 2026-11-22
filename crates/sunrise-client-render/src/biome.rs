@@ -341,7 +341,7 @@ pub fn mod_biome_files(prepared: &std::path::Path) -> Vec<(String, Value)> {
 }
 impl Biomes {
     pub fn load(root: &ResourceRoot) -> Result<Self> {
-        if crate::sunset17_assets::detect(root.prepared()) {
+        if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             return Self::load_1_7_10(root);
         }
         let maps = Colormaps {

@@ -4,37 +4,20 @@
 //! engine's menu slot each of the era's slots stands for, and the painters'
 //! call sites.
 //!
-//! The content root decides, once per load ([`UiEra`]): a root the era asset
-//! loader recognises draws 1.7.10's HUD and screens, every other root keeps
-//! 26.3's. The painters' tables are the era's own layout, so the hit
-//! rectangles are exactly the drawn slots; only the adapter between an era
-//! slot's role and the engine's menu index lives here.
+//! The content root's profile decides, once per load: a
+//! [`Profile::V1_7_10`](sunrise_core::profile::Profile::V1_7_10) root draws
+//! 1.7.10's HUD and screens, every other root keeps 26.3's. The painters'
+//! tables are the era's own layout, so the hit rectangles are exactly the
+//! drawn slots; only the adapter between an era slot's role and the engine's
+//! menu index lives here.
 
 use super::*;
 use std::sync::OnceLock;
 use sunrise_client::command::args::GameMode;
 use sunrise_client::hud_1_7_10::{self, HotbarItem17, Hud17, HudLayout17, HudPlayer17, HudState17};
-use sunrise_client::resource_source::ResourceSource;
 use sunrise_client::screens_1_7_10::{
     self as era_screens, FurnaceProgress17, MenuView17, Screen17, Slot17, SlotRole17, SlotSource17,
 };
-
-/// Whether a frame draws 1.7.10's UI or 26.3's, chosen from the loaded content
-/// root by the same marker as the era asset loader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum UiEra {
-    Modern,
-    OneSevenTen,
-}
-
-/// The UI a content root asks for.
-pub(super) fn ui_era(source: &ResourceSource) -> UiEra {
-    if hud_1_7_10::era_ui(source) {
-        UiEra::OneSevenTen
-    } else {
-        UiEra::Modern
-    }
-}
 
 /// `GameGui.prevHealth` and the health the last tick saw: the white hurt
 /// flash draws the health the hit took the player from
@@ -58,7 +41,7 @@ impl Default for EraHud {
 impl Game<'_> {
     /// Whether this game's content root is the era's.
     pub(super) fn era_ui(&self) -> bool {
-        self.pack.era_ui == UiEra::OneSevenTen
+        self.pack.profile == sunrise_core::profile::Profile::V1_7_10
     }
 
     /// `Hud.tick`'s health memory for the era HUD's hurt flash.

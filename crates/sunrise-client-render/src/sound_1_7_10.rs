@@ -319,6 +319,11 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"marker").unwrap();
         }
+        fs::write(
+            root.join(crate::sunset17_assets::MANIFEST),
+            br#"{"minecraft":"1.7.10"}"#,
+        )
+        .unwrap();
         for sound in [
             "dig/stone1",
             "dig/stone2",

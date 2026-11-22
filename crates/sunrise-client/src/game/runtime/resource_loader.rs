@@ -66,6 +66,7 @@ impl GameCpuResources {
         document: Option<&sunrise_client::mobs::EntityModelDocument>,
     ) -> Result<Self> {
         let root = resources.prepared();
+        let era = resources.profile() == sunrise_core::profile::Profile::V1_7_10;
         let owned_document;
         let document = match document {
             Some(document) => Some(document),
@@ -106,7 +107,7 @@ impl GameCpuResources {
                 minecarts::CartModels::load(document)
             });
             let creative_screen = named_scope(scope, "game_cpu.creative", move || {
-                let mut creative = if sunrise_client::sunset17_assets::detect(root) {
+                let mut creative = if era {
                     log::info!(
                         "Sunrise: 1.7.10 has no creative-inventory.json; the creative screen has no tabs"
                     );

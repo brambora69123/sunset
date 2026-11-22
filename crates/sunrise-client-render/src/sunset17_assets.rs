@@ -6,21 +6,23 @@
 //! file under `textures/blocks/`, each item texture under `textures/items/`, and the GUI, font
 //! and language files beside them. That is a different shape from 26.3's model-driven atlases,
 //! which is why this module exists: [`Assets`] reads the extraction's manifest
-//! (`assets-1.7.10.json`), [inserts every texture the era's atlases stitched][Assets::insert_sprites]
+//! (the extraction's manifest), [inserts every texture the era's atlases stitched][Assets::insert_sprites]
 //! into the renderer's shared sprite array under names of the era's own folders
 //! (`minecraft:blocks/stone`, `minecraft:items/stick`), and answers the id → sprite question
 //! through the ported `Block.getSprite`/`Item.getSprite` table.
 //!
-//! The content root decides: a folder with `assets-1.7.10.json` (or a resource source with the
-//! era's `font/glyph_sizes.bin` and no `font/default.json`) is a 1.7.10 root. No flag switches
-//! this on, so `--1-7-10-terrain` and its export always load the same resources.
+//! The content root's [`Profile`](sunrise_core::profile::Profile) decides: a
+//! prepared 1.7.10 folder carries the extraction's manifest, and a layered pack
+//! stack over it keeps that profile. No flag switches this on, so
+//! `--1-7-10-terrain` and its export always load the same resources.
 //!
-//! The GUI atlas (`HudAtlas`) and the font (`Font`) notice the same shape through
-//! [`is_source`]: [`HudAtlas::build`](crate::hud::HudAtlas::build) then packs
-//! `textures/gui` and `textures/font`, and the font loader reads `ascii.png`, the unicode pages
-//! and `glyph_sizes.bin` instead of the modern `font/*.json` definitions.
+//! The GUI atlas (`HudAtlas`) and the font (`Font`) read the same profile from
+//! their resource source: [`HudAtlas::build`](crate::hud::HudAtlas::build) then
+//! packs `textures/gui` and `textures/font`, and the font loader reads
+//! `ascii.png`, the unicode pages and `glyph_sizes.bin` instead of the modern
+//! `font/*.json` definitions.
 
-use crate::{Result, resource_source::ResourceSource, sprites::Sprites};
+use crate::{Result, sprites::Sprites};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -62,22 +64,6 @@ pub const FONT_TEXTURES: &str = "assets/minecraft/textures/font/";
 pub const GLYPH_SIZES: &str = "assets/minecraft/font/glyph_sizes.bin";
 /// The era's English language file.
 pub const ENGLISH_LANG: &str = "assets/minecraft/lang/en_US.lang";
-
-/// Whether `root` is a prepared 1.7.10 folder: it carries the extraction's manifest.
-pub fn detect(root: &Path) -> bool {
-    root.join(MANIFEST).is_file()
-}
-
-/// Whether a resolved resource source is a 1.7.10 tree.
-///
-/// The manifest lives beside `assets/`, which a layered pack stack cannot read, so the shape
-/// decides: the era's glyph metrics and `ascii.png`, and none of 26.3's font definitions. A
-/// 26.3 root carries `font/default.json` and never takes this path.
-pub fn is_source(source: &ResourceSource) -> bool {
-    source.contains(GLYPH_SIZES)
-        && source.contains("assets/minecraft/textures/font/ascii.png")
-        && !source.contains("assets/minecraft/font/default.json")
-}
 
 /// One manifest block row: the id, its registry name and every sprite any metadata or face
 /// registers.
@@ -121,7 +107,7 @@ struct BlockRowJson {
 }
 
 impl Assets {
-    /// Read `root`'s `assets-1.7.10.json` and check it agrees with the extracted files.
+    /// Read `root`'s extraction manifest and check it agrees with the extracted files.
     pub fn load(root: &Path) -> Result<Self> {
         let bytes = std::fs::read(root.join(MANIFEST))?;
         let manifest: Manifest = serde_json::from_slice(&bytes)?;
@@ -319,13 +305,14 @@ mod tests {
         resource_source::{ResourceRoot, ResourceSource},
         sprites::Sprites,
     };
+    use sunrise_core::profile::Profile;
 
     /// The prepared 1.7.10 folder, when this machine has one (CI does not).
     fn root() -> Option<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/sunrise-client")
             .join(VERSION);
-        detect(&root).then_some(root)
+        (Profile::of_resource_root(&root).ok() == Some(Profile::V1_7_10)).then_some(root)
     }
 
     #[test]
@@ -505,20 +492,10 @@ mod tests {
     }
 
     #[test]
-    fn a_root_with_modern_font_definitions_is_not_the_era() {
+    fn a_source_keeps_the_profile_it_was_opened_with() {
         use crate::resource_source::Resource;
-        // A 26.3-shaped tree: it has an ascii sheet and glyph metrics only if a pack ships
-        // them, but its `font/default.json` decides the modern font path.
-        let files = [
-            ("assets/minecraft/font/glyph_sizes.bin", Vec::new()),
-            ("assets/minecraft/textures/font/ascii.png", Vec::new()),
-            ("assets/minecraft/font/default.json", b"{}".to_vec()),
-        ]
-        .into_iter()
-        .map(|(name, bytes)| (name.to_owned(), Resource::bytes(bytes)))
-        .collect();
-        assert!(!is_source(&ResourceSource::indexed(files)));
-        // The era's tree has the two font files and no definitions.
+        // A flat index is built over a prepared root's files: the profile comes
+        // from that root, not from whichever fonts the index happens to hold.
         let files = [
             ("assets/minecraft/font/glyph_sizes.bin", Vec::new()),
             ("assets/minecraft/textures/font/ascii.png", Vec::new()),
@@ -526,7 +503,12 @@ mod tests {
         .into_iter()
         .map(|(name, bytes)| (name.to_owned(), Resource::bytes(bytes)))
         .collect();
-        assert!(is_source(&ResourceSource::indexed(files)));
+        let era = ResourceSource::indexed(files).with_profile(Profile::V1_7_10);
+        assert_eq!(era.profile(), Profile::V1_7_10);
+        assert_eq!(
+            ResourceSource::indexed(Default::default()).profile(),
+            Profile::Modern
+        );
     }
 
     #[test]

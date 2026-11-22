@@ -208,8 +208,11 @@ mod item_data_load;
 pub(super) use item_data_load::{LoadRole, load_item_data};
 
 /// The built-in registries' names in ID order, with Sunrise's own data components.
-fn builtin_registry_names(root: &Path) -> sunrise_client::Result<BTreeMap<String, Vec<String>>> {
-    let mut registries: BTreeMap<_, _> = builtin_registries(root)?
+fn builtin_registry_names(
+    root: &Path,
+    profile: sunrise_core::profile::Profile,
+) -> sunrise_client::Result<BTreeMap<String, Vec<String>>> {
+    let mut registries: BTreeMap<_, _> = builtin_registries(root, profile)?
         .registries
         .into_iter()
         .map(|(name, ids)| (name, ids.names))
@@ -223,6 +226,7 @@ fn builtin_registry_names(root: &Path) -> sunrise_client::Result<BTreeMap<String
 /// Capture registration's stable registries, settings and stock capability type owners.
 pub(super) fn install_registration_data(
     root: &Path,
+    profile: sunrise_core::profile::Profile,
     runtime_files: BTreeMap<String, Arc<dyn mod_api::RuntimeFileSource>>,
 ) -> sunrise_client::Result<()> {
     let packages = mod_api::__private::loaded_mods();
@@ -231,7 +235,7 @@ pub(super) fn install_registration_data(
         .expect("the host's paths have an encoding the mod API carries");
     (mod_api::__private::platform::platform()?.install_registration_data)(
         mod_api::__private::RegistrationData::new(
-            builtin_registry_names(root)?,
+            builtin_registry_names(root, profile)?,
             sunrise_world::native_load_context::capture_settings(
                 &Game::mod_data_root(),
                 packages.ids(),
@@ -245,11 +249,14 @@ pub(super) fn install_registration_data(
     Ok(())
 }
 
-fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::registry::Builtin> {
+fn builtin_registries(
+    root: &Path,
+    profile: sunrise_core::profile::Profile,
+) -> sunrise_client::Result<sunrise_protocol::registry::Builtin> {
     // A prepared 1.7.10 folder has no `registries.json`: the era's ids are its
     // own content export's, not 26.3's registry dump. With no mods reading the
     // vanilla name lists, an empty catalog serves them.
-    if sunrise_client::sunset17_assets::detect(root) {
+    if profile == sunrise_core::profile::Profile::V1_7_10 {
         log::info!(
             "Sunrise: 1.7.10 has no registries.json; the built-in registry name lists are empty"
         );
@@ -264,13 +271,16 @@ fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::r
 /// Freeze native component IDs before reading content or opening a connection.
 /// With no mod registering any, nothing is installed, which every reader
 /// treats as no custom components, and `registries.json` isn't read.
-pub(super) fn register_components(root: &std::path::Path) -> sunrise_client::Result<()> {
+pub(super) fn register_components(
+    root: &std::path::Path,
+    profile: sunrise_core::profile::Profile,
+) -> sunrise_client::Result<()> {
     let mut names = Vec::new();
     Game::native_component_types(&RegistrationContext::new(), &mut names);
     if names.is_empty() {
         return Ok(());
     }
-    let builtin = builtin_registries(root)?;
+    let builtin = builtin_registries(root, profile)?;
     let types = builtin
         .get("minecraft:data_component_type")
         .ok_or("missing data component registry")?;
@@ -1048,7 +1058,11 @@ pub(in crate::game) fn content_root(
         content_overlay(root, sources, &jar_store)?
     };
     let world_fluids = sunrise_client::mod_content::register_world_fluids(&overlay.mods)?;
-    register_block_entity_types(overlay.root.prepared(), &overlay.mods)?;
+    register_block_entity_types(
+        overlay.root.prepared(),
+        overlay.root.profile(),
+        &overlay.mods,
+    )?;
     if overlay.announce {
         sunrise_protocol::mod_list::set_local(overlay.announced);
     }
@@ -1097,7 +1111,7 @@ pub(in crate::game) fn content_root(
     })?;
     register_entity_types(&overlay.mods);
     register_menu_types(&overlay.mods)?;
-    register_iterated_registries(overlay.root.prepared())?;
+    register_iterated_registries(overlay.root.prepared(), overlay.root.profile())?;
     sunrise_client::mod_content::set_fluid_looks(&overlay.mods);
     sunrise_client::mod_content::set_fluid_interactions(&overlay.mods);
     // Freeze ownership with the startup registries, before preparing Parts. Pack and data
@@ -1117,8 +1131,9 @@ pub(in crate::game) fn content_root(
 /// in the public entity-type registry, not in the protocol ID table.
 pub(in crate::game) fn register_iterated_registries(
     root: &std::path::Path,
+    profile: sunrise_core::profile::Profile,
 ) -> sunrise_client::Result<()> {
-    let builtin = builtin_registries(root)?;
+    let builtin = builtin_registries(root, profile)?;
     if let Some(ids) = builtin.get("minecraft:entity_type") {
         mod_api::__private::resolve_entity_types(
             ids.names
@@ -1141,13 +1156,14 @@ pub(in crate::game) fn register_iterated_registries(
 
 fn register_block_entity_types(
     root: &std::path::Path,
+    profile: sunrise_core::profile::Profile,
     mods: &[sunrise_client::mod_content::ContentMod],
 ) -> sunrise_client::Result<()> {
     use sunrise_client::block_entity_types::{self, BlockEntityTypes};
     use sunrise_protocol::registry::Builtin;
     // No 26.3 registry dump on a 1.7.10 root, and its mods' content cannot carry
     // 26.3 block entity ids: nothing to register.
-    if sunrise_client::sunset17_assets::detect(root) {
+    if profile == sunrise_core::profile::Profile::V1_7_10 {
         log::info!(
             "Sunrise: 1.7.10 has no registries.json; no block entity type ids are registered"
         );

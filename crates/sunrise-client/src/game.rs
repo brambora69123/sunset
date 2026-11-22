@@ -846,9 +846,9 @@ pub struct PackResources {
     polytone_post: Option<Arc<sunrise_client::polytone_post::PolytonePost>>,
     /// The packs' Polytone custom colours (`polytone/colors.json`).
     polytone_colors: Arc<sunrise_client::pack_palette::PackColors>,
-    /// Whether the content root is 1.7.10's, so the frame draws its HUD and
-    /// container screens instead of 26.3's (`era_ui::ui_era`).
-    era_ui: crate::game::era_ui::UiEra,
+    /// Whether the content root is 1.7.10's: its profile selects the era's
+    /// HUD and container screens instead of 26.3's (`era_ui`).
+    profile: sunrise_core::profile::Profile,
 }
 
 /// A quick craft drag as the screen draws it: each dragged slot's count and
@@ -6557,6 +6557,7 @@ impl Game<'_> {
         self.debug_density.borrow_mut().clear();
         let world_loading::PreparedWorld {
             save_root,
+            profile,
             shapes,
             level,
             world,
@@ -6570,6 +6571,10 @@ impl Game<'_> {
             owner_migration,
         } = prepared;
         self.server_loot = loot;
+        debug_assert_eq!(
+            profile, self.pack.profile,
+            "the world's profile was resolved against the root's"
+        );
         let dim = Dim::from_id(&level.dimension);
         self.level_shapes = shapes;
         self.world_root = save_root.clone();
@@ -11619,7 +11624,12 @@ pub(crate) fn run_with(
         .select(&std::env::current_dir()?, &early_settings.mods.enabled);
     let mod_phase = mod_api::__private::PhaseOwner::new(mod_api::__private::ModPhase::Packages);
     api_values::install_packages(options.mods.native.packages(), &options.mods.selected)?;
-    mods::install_registration_data(&vanilla_root, mods::runtime_files::sources(&options.mods))?;
+    let profile = sunrise_core::profile::Profile::of_resource_root(&vanilla_root)?;
+    mods::install_registration_data(
+        &vanilla_root,
+        profile,
+        mods::runtime_files::sources(&options.mods),
+    )?;
     mod_phase.advance(mod_api::__private::ModPhase::Registration)?;
     crate::game::part_admission::admit_parts(mod_api::__private::mods())?;
     // The structure types those mods registered, handed to the engine before
@@ -11650,7 +11660,7 @@ pub(crate) fn run_with(
     // Their chunk generators and biome sources, which those levels' and the packs' stems name.
     native_chunk_generator::install();
     native_biome_source::install();
-    mods::register_components(&vanilla_root)?;
+    mods::register_components(&vanilla_root, profile)?;
     mods::register_standalone_models(options.execution_role);
     mods::register_layer_definitions(options.execution_role, &vanilla_root);
     mods::register_debug_entries(options.execution_role);

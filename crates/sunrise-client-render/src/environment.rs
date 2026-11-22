@@ -6,6 +6,7 @@ use serde_json::Value as Json;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use sunrise_assets::resource_source::ResourceSource;
+use sunrise_core::profile::Profile;
 use sunrise_world::environment_attributes::{
     Attribute, AttributeMap, Entry, Kind, Value, attribute,
 };
@@ -1016,7 +1017,7 @@ impl Environment {
         packs: &PackModifiers,
         extra: &Json,
     ) -> Result<Self> {
-        if crate::sunset17_assets::is_source(root) {
+        if root.profile() == Profile::V1_7_10 {
             log::info!(
                 "Sunrise: 1.7.10 has no dimension_type files; {dimension} uses the era's \
                  WorldProvider colours and no timelines (its sky reads the day clock instead)"
@@ -1155,7 +1156,7 @@ impl Environment {
             system: builder.build(),
             source: root.clone(),
             dimension: dimension.to_owned(),
-            era: crate::sunset17_assets::is_source(root),
+            era: root.profile() == Profile::V1_7_10,
             packs: packs.clone(),
             frame,
             biomes,
@@ -1417,14 +1418,12 @@ mod tests {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        for path in [
-            crate::sunset17_assets::GLYPH_SIZES,
-            "assets/minecraft/textures/font/ascii.png",
-        ] {
-            let path = dir.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, [0u8; 1]).unwrap();
-        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(crate::sunset17_assets::MANIFEST),
+            br#"{"minecraft":"1.7.10"}"#,
+        )
+        .unwrap();
         let environment = Environment::load(&ResourceSource::directory(dir)).unwrap();
         let noon = environment.sample(&Sample {
             day_time: 6000,

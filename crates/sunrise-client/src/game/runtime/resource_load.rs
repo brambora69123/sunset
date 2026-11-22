@@ -175,10 +175,6 @@ pub(super) fn load_core(
     let role = load_role.execution;
     let root = resources.prepared();
     let headless = !role.is_client();
-    // A prepared 1.7.10 folder: the era has no 26.3 tables beside the content
-    // export, so the loaders that read one take the era's own rules or an
-    // empty default, each with its own log line.
-    let era = sunrise_client::sunset17_assets::detect(root);
     // The model library reads every file under `assets/` and needs no
     // block registry, so it is parsed beside `Assets::load` rather than
     // after it. It used to sit inside `reload` behind both the registry
@@ -209,8 +205,14 @@ pub(super) fn load_core(
         Err(e) => return Ok(Err(e.to_string())),
     };
     progress.set(1);
-    let item_data =
-        Arc::new(mods::load_item_data(root, role, load_role.owning).map_err(|e| e.to_string())?);
+    // A prepared 1.7.10 folder: the era has no 26.3 tables beside the content
+    // export, so the loaders that read one take the era's own rules or an
+    // empty default, each with its own log line.
+    let profile = assets.profile;
+    let era = profile == sunrise_core::profile::Profile::V1_7_10;
+    let item_data = Arc::new(
+        mods::load_item_data(root, profile, role, load_role.owning).map_err(|e| e.to_string())?,
+    );
     let registry = assets.registry;
     let entity_models_for_render = entity_models.clone();
     let (render, gameplay, visibility, biomes, environment, collision) = std::thread::scope(
@@ -348,6 +350,10 @@ pub(super) fn gameplay_tables(
     progress: &Progress,
 ) -> std::result::Result<GameplayTables, String> {
     let facts_step = startup::step("core.block_facts");
+    // A 1.7.10 root lights with the era's tables (no `occlusion.nbt`); the
+    // production load below deliberately uses `LightTables::new`, whose
+    // dampening/emission cells are the era's without the legacy emitter rule.
+    let era = assets.profile == sunrise_core::profile::Profile::V1_7_10;
     // Read whole, then parsed from the buffer: `serde_json::from_reader`
     // pulls through a `BufReader` and is measurably slower on a file this
     // size than one read plus `from_slice`, which is how `BlockFacts` next
@@ -367,14 +373,14 @@ pub(super) fn gameplay_tables(
     let (light, motion) = std::thread::scope(|scope| {
         let light = Step::spawn(scope, parallel, "light", || {
             startup::time("core.light", || {
-                if sunrise_client::sunset17_assets::detect(root) {
+                if era {
                     log::info!(
                         "Sunrise: 1.7.10 has no occlusion.nbt; light uses the content \
                          export's dampening and emission with every face empty"
                     );
                     Ok(LightTables::new(&facts))
                 } else {
-                    LightTables::load(root, assets.registry, &facts)
+                    LightTables::load(root, assets.registry, &facts, assets.profile)
                 }
             })
             .map_err(|e| e.to_string())
@@ -616,7 +622,7 @@ pub(super) fn load_resources_for_mods(
     let headless = !role.is_client();
     // A prepared 1.7.10 folder: its `.lang` file and bitmap font replace the
     // 26.3 ones, which a pack stack never carries here.
-    let era = sunrise_client::sunset17_assets::detect(&root);
+    let era = resolved.profile() == sunrise_core::profile::Profile::V1_7_10;
     let texture_atlases = if headless {
         Vec::new()
     } else {
@@ -727,7 +733,7 @@ pub(super) fn load_resources_for_mods(
     };
     // Every loaded game publishes scalar registry keys, including callers that
     // load a prepared root directly instead of building a mod content overlay.
-    crate::game::mods::register_iterated_registries(resolved.prepared())?;
+    crate::game::mods::register_iterated_registries(resolved.prepared(), resolved.profile())?;
     log::info!("load core tables: {:.2}s", started.elapsed().as_secs_f32());
     let CoreTables {
         item_data,

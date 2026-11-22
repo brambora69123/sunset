@@ -1,43 +1,8 @@
-//! The era UI's two seams: which painter the content root selects, and the
-//! engine menu slot each of the era's slots stands for. The painters' own
-//! layouts are pinned by their crate's tests; these check the wiring.
-use super::era_ui::{UiEra, era_engine_slot, era_slot_position, ui_era};
-use sunrise_client::resource_source::{Resource, ResourceSource};
+//! The era UI's wiring: the engine menu slot each of the era's slots stands
+//! for. The painters' own layouts are pinned by their crate's tests; the
+//! content root's profile picks the painter (`Game::era_ui`).
+use super::era_ui::{era_engine_slot, era_slot_position};
 use sunrise_client::screens_1_7_10::{Screen17, Slot17};
-
-/// A content root's files, with no bytes: only their names decide the shape.
-fn source(files: &[&str]) -> ResourceSource {
-    let files = files
-        .iter()
-        .map(|name| ((*name).to_owned(), Resource::bytes(Vec::new())))
-        .collect();
-    ResourceSource::indexed(files)
-}
-
-#[test]
-fn the_hud_call_site_selects_the_era_painter_only_for_an_era_root() {
-    // `era_ui::is_source`'s shape: the era's glyph metrics and ascii sheet,
-    // and none of 26.3's font definitions.
-    let era = source(&[
-        "assets/minecraft/font/glyph_sizes.bin",
-        "assets/minecraft/textures/font/ascii.png",
-        "assets/minecraft/textures/gui/icons.png",
-    ]);
-    assert_eq!(ui_era(&era), UiEra::OneSevenTen);
-    let modern = source(&[
-        "assets/minecraft/font/default.json",
-        "assets/minecraft/textures/font/ascii.png",
-    ]);
-    assert_eq!(ui_era(&modern), UiEra::Modern);
-    // A 26.3 root that also ships the era's font sheets is still 26.3: its
-    // font definitions decide.
-    let mixed = source(&[
-        "assets/minecraft/font/glyph_sizes.bin",
-        "assets/minecraft/textures/font/ascii.png",
-        "assets/minecraft/font/default.json",
-    ]);
-    assert_eq!(ui_era(&mixed), UiEra::Modern);
-}
 
 /// The engine's menu ids for the era's slot names, as `slots()` builds them:
 /// hotbar 0..9, main rows 9..36, crafting 100.., result 200, a container's

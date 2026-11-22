@@ -115,7 +115,13 @@ fn loaded_source_stacks_are_normalised_after_overlay_without_losing_metadata() {
         panic!("chunk compound")
     };
     root.insert("block_entities".into(), Tag::List(vec![source.clone()]));
-    let mut loaded = decode(&encoded, &registry, &biomes).unwrap();
+    let mut loaded = decode(
+        &encoded,
+        &registry,
+        &biomes,
+        sunrise_core::profile::Profile::Modern,
+    )
+    .unwrap();
     assert_eq!(
         loaded.saved.as_ref().unwrap().block_entity_sources[0].1,
         source
@@ -193,7 +199,13 @@ fn reload_loot_case(
     let bytes = nbt::write_named(&encoded, Limits::default()).unwrap();
     let (encoded, used) = nbt::read_named(&bytes, Limits::default()).unwrap();
     assert_eq!(used, bytes.len());
-    decode(&encoded, registry, biomes).unwrap()
+    decode(
+        &encoded,
+        registry,
+        biomes,
+        sunrise_core::profile::Profile::Modern,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -270,7 +282,13 @@ fn unopened_loot_tags_round_trip_with_zero_seed_omitted() {
                 bytes
             );
             assert!(tag.get("Items").is_none());
-            chunk = decode(&encoded, &registry, &biomes).unwrap();
+            chunk = decode(
+                &encoded,
+                &registry,
+                &biomes,
+                sunrise_core::profile::Profile::Modern,
+            )
+            .unwrap();
             assert!(
                 chunk.block_entities[0]
                     .1
@@ -432,7 +450,13 @@ fn container_limit_survives_chunk_save_and_reload() {
         ..Default::default()
     }));
     let encoded = encode(&chunk, &registry, &biomes, &Default::default());
-    let loaded = decode(&encoded, &registry, &biomes).unwrap();
+    let loaded = decode(
+        &encoded,
+        &registry,
+        &biomes,
+        sunrise_core::profile::Profile::Modern,
+    )
+    .unwrap();
     assert_eq!(
         loaded.saved.as_ref().unwrap().block_entity_sources[0]
             .1
@@ -454,6 +478,7 @@ fn unmodified_container_nbt_has_no_stack_limit() {
         &encode(&chunk, &registry, &biomes, &Default::default()),
         &registry,
         &biomes,
+        sunrise_core::profile::Profile::Modern,
     )
     .unwrap();
     assert_eq!(loaded.saved.as_ref().unwrap().block_entity_sources.len(), 1);
@@ -593,7 +618,13 @@ fn a_loot_table_that_is_not_an_identifier_is_dropped_with_its_seed() {
     };
     chest.insert("LootTable".into(), string("Bad Name!"));
     chest.insert("LootTableSeed".into(), Tag::Long(73));
-    let loaded = decode(&encoded, &registry, &biomes).unwrap();
+    let loaded = decode(
+        &encoded,
+        &registry,
+        &biomes,
+        sunrise_core::profile::Profile::Modern,
+    )
+    .unwrap();
     assert!(
         loaded
             .saved

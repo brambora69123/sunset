@@ -1,6 +1,7 @@
 use crate::Result;
 use serde_json::Value;
 use std::{collections::BTreeSet, io, path::Path, sync::Arc};
+use sunrise_core::profile::Profile;
 use sunrise_world::{
     DATA_VERSION,
     heightmap::HeightmapState,
@@ -71,6 +72,9 @@ impl TerrainBlockStates for Properties {
 pub struct Assets {
     /// Leaked once per process: shared by world generation threads.
     pub registry: &'static BlockRegistry,
+    /// The Minecraft version the root this registry came from targets: the
+    /// rendering, meshing and behaviour tables read it.
+    pub profile: Profile,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
     /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
@@ -241,12 +245,13 @@ fn invalid(message: &str) -> io::Error {
 impl Assets {
     /// The block registry and the facts world generation and collisions read.
     ///
-    /// A prepared 1.7.10 folder ([`crate::sunset17_assets::detect`]) has no 26.3
-    /// manifest and no block-tag bundle; [`Self::load_1_7_10`] builds the same
-    /// table from the era's content export instead. Every other folder takes
-    /// the 26.3 path below unchanged.
+    /// A prepared 1.7.10 folder ([`sunrise_core::profile::Profile::of_resource_root`])
+    /// has no 26.3 manifest and no block-tag bundle; [`Self::load_1_7_10`] builds
+    /// the same table from the era's content export instead. Every other folder
+    /// takes the 26.3 path below unchanged.
     pub fn load(root: &Path) -> Result<Self> {
-        if crate::sunset17_assets::detect(root) {
+        let profile = Profile::of_resource_root(root)?;
+        if profile == Profile::V1_7_10 {
             return Self::load_1_7_10(root);
         }
         let manifest: Value = sunrise_world::json_file::read(&root.join("sunrise-resources.json"))?;
@@ -324,6 +329,7 @@ impl Assets {
         let registry = registry.intern(mod_api::__private::registry_installation_identity());
         Ok(Self {
             registry,
+            profile,
             properties,
             material_states,
             blocks_fluid_flow,
@@ -376,6 +382,7 @@ impl Assets {
         let registry = registry.intern(mod_api::__private::registry_installation_identity());
         Ok(Self {
             registry,
+            profile: Profile::V1_7_10,
             properties: Properties(Arc::new(facts)),
             material_states,
             blocks_fluid_flow,
@@ -487,11 +494,9 @@ impl RenderAssets {
     ) -> Result<Self> {
         // The era's own resources: 1.7.10 registers its textures one file at a
         // time and has no block models, so the 26.3 loader cannot read the
-        // tree. Either shape of root (a prepared folder or a layered source)
-        // selects it, the same marker the font and HUD loaders use.
-        if crate::sunset17_assets::detect(root.prepared())
-            || crate::sunset17_assets::is_source(root.source())
-        {
+        // tree. The root's profile decides, in both shapes (a prepared folder
+        // or a layered pack stack over it).
+        if assets.profile == Profile::V1_7_10 {
             return Self::load_1_7_10_with(root, draws);
         }
         let registry = assets.registry;

@@ -60,6 +60,7 @@ impl OwningLoad {
 /// Capture load inputs at the resource-generation boundary, before workers share them.
 pub(in super::super) fn load_item_data(
     root: &Path,
+    profile: sunrise_core::profile::Profile,
     role: ExecutionRole,
     owning_load: OwningLoad,
 ) -> sunrise_client::Result<ItemData> {
@@ -69,7 +70,10 @@ pub(in super::super) fn load_item_data(
         mod_api::__private::ModPhase::World
     });
     let _reload = phase.reloading()?;
-    let inputs = LoadInputs::new(builtin_registry_names(root)?, Game::mod_data_root());
+    let inputs = LoadInputs::new(
+        builtin_registry_names(root, profile)?,
+        Game::mod_data_root(),
+    );
     let inventory = sunrise_mod_package::enabled::EnabledMods::read(root)?;
     let ids: Vec<_> = if role.is_logical_server() {
         inventory.server_ids().collect()

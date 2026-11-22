@@ -1057,7 +1057,7 @@ pub fn resources(
         stacked.insert(name, below.into_iter().chain(copies).collect());
     }
     stacked.retain(|name, _| index.contains_key(name));
-    Ok(ResourceSource::indexed_with_layers(index, stacked))
+    Ok(ResourceSource::indexed_with_layers(index, stacked).with_profile(base.profile()))
 }
 
 fn merged_resources(

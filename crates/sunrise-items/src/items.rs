@@ -581,6 +581,9 @@ pub fn block_tag_state_names(facts: &BlockFacts) -> Arc<[Arc<str>]> {
 /// normal worlds load their catalog from the resource snapshot.
 #[derive(Clone, Default)]
 pub struct Items {
+    /// The Minecraft version the root this catalog came from targets: the
+    /// save format and the item rules read it.
+    pub profile: sunrise_core::profile::Profile,
     pub items: HashMap<Arc<str>, ItemInfo>,
     /// Shared Block.getItem snapshot, including blocks sharing another block's item.
     pub block_items: Arc<HashMap<String, String>>,
@@ -1317,6 +1320,7 @@ impl Items {
         }
         let registry_order = registry_order(root, &order);
         Ok(Self {
+            profile: sunrise_core::profile::Profile::of_resource_root(root)?,
             items,
             block_items: Default::default(),
             component_registry: ingredient_defaults::component_registry(root, &entity_tags)?,

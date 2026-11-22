@@ -1084,7 +1084,7 @@ impl Game<'_> {
         }
         let root = self.options.resources.clone();
         let item_data = Arc::clone(&self.res.core.item_data);
-        let builtin = builtin_registries(&root).ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run sunrise-prepare), then try again.")?;
+        let builtin = builtin_registries(&root, self.pack.profile).ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run sunrise-prepare), then try again.")?;
         let lang = Arc::new(sunrise_client::net::load_language(&root));
         // Options.createInformation: what the server learns about this player,
         // sent again when one of those options changes.
@@ -1408,7 +1408,8 @@ impl Game<'_> {
         self.world_biomes = None;
         self.world_biomes_base = None;
         let root = self.options.resources.clone();
-        let builtin = builtin_registries(&root).ok_or("Resources are incomplete")?;
+        let builtin =
+            builtin_registries(&root, self.pack.profile).ok_or("Resources are incomplete")?;
         let lang = Arc::new(sunrise_client::net::load_language(&root));
         let info = self
             .settings

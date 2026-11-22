@@ -165,7 +165,9 @@ mod tests {
             let collision = crate::collisions::load(&root, assets.registry).unwrap();
             let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
             let context = Arc::new(WorkerContext {
-                light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
+                light: Arc::new(
+                    LightTables::load(&root, assets.registry, &facts, assets.profile).unwrap(),
+                ),
                 tables: Arc::new(
                     MeshTables::new(&assets, &render, &facts, visibility, None).unwrap(),
                 ),

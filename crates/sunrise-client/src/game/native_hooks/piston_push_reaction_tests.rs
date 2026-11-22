@@ -1091,9 +1091,13 @@ fn piston_push_reaction_position_state_opens_ticks_and_saves() {
                     assert_eq!(saved_slots, slots);
                 }
                 if matches!(case.as_str(), "loot" | "mixed-loot" | "chest") {
-                    let loaded =
-                        sunrise_client::save::decode(&encoded, registry, game.res.biomes())
-                            .unwrap();
+                    let loaded = sunrise_client::save::decode(
+                        &encoded,
+                        registry,
+                        game.res.biomes(),
+                        game.pack.profile,
+                    )
+                    .unwrap();
                     assert!(
                         !loaded
                             .saved

@@ -89,7 +89,12 @@ fn main() -> Result<(), Error> {
     )?);
     let context = Arc::new(WorkerContext {
         tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility, None)?),
-        light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+        light: Arc::new(LightTables::load(
+            &root,
+            assets.registry,
+            &facts,
+            assets.profile,
+        )?),
         biomes: biomes.clone(),
         assets: assets.clone(),
         render,

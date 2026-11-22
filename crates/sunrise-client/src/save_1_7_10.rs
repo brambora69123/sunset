@@ -1,10 +1,12 @@
 //! Minecraft 1.7.10 worlds: the era's chunk, `level.dat` and player forms.
 //!
 //! A save is 1.7.10's when its `level.dat` carries the era's field set
-//! (`RandomSeed`, `generatorName`, `version` 19133 and no `DataVersion`).
-//! A world not saved yet is 1.7.10's when the content root is the 1.7.10
-//! export (`sunset_1_7_content`), because the block ids a chunk stores are
-//! that export's rows: the chunk format and the content root travel together.
+//! ([`Profile::of_level_data`](sunrise_core::profile::Profile::of_level_data)):
+//! `RandomSeed`, `generatorName`, `version` 19133 and no `DataVersion`.
+//! A world not saved yet is 1.7.10's when the content root's profile is
+//! [`Profile::V1_7_10`](sunrise_core::profile::Profile::V1_7_10), because the
+//! block ids a chunk stores are that export's rows: the chunk format and the
+//! content root travel together.
 //! The 26.3 code paths in `save.rs` stay as they are; this module is the
 //! second format they select.
 //!
@@ -58,39 +60,8 @@ const MAX_BLOCK_ID: usize = 255;
 // Which format a save uses
 // ---------------------------------------------------------------------------
 
-/// Whether a `level.dat` `Data` compound is 1.7.10's: no `DataVersion`
-/// (that tag starts in 1.8) and a seed plus a version, as `WorldData` writes.
-pub fn is_1_7_10_level_data(data: &Tag) -> bool {
-    data.get("DataVersion").is_none()
-        && data.get("RandomSeed").is_some()
-        && data.get("version").is_some()
-}
-
 /// Whether a chunk root is 1.7.10's `{"Level": {...}}`.
 pub use sunrise_world::region::is_1_7_10_chunk;
-
-/// Whether the block registry was built from the 1.7.10 content export, so
-/// the row [`sunset_1_7_content::state_id`] names is this registry's state.
-///
-/// The two probes are [`crate::sunset17gen`]'s: air must be row 0, and block
-/// id 2 metadata 0 must be `minecraft:grass`, which no 26.3 registry has.
-pub fn registry_is_1_7_10(registry: &sunrise_world::registry::BlockRegistry) -> bool {
-    use sunrise_world::registry::BlockStateId;
-    let name = |id: u16, meta: u8| {
-        era_row(id, meta)
-            .and_then(|row| registry.state(BlockStateId(row)))
-            .map(|state| state.name.as_str())
-    };
-    name(0, 0) == Some("minecraft:air") && name(2, 0) == Some("minecraft:grass")
-}
-
-/// Whether an item catalog was built from the 1.7.10 content export.
-///
-/// `minecraft:reeds` is the era item; 26.3 renamed it `minecraft:sugar_cane`,
-/// so a table holding it was loaded from the era's `items.json`.
-pub fn is_1_7_10_content(items: &crate::items::Items) -> bool {
-    items.items.contains_key("minecraft:reeds")
-}
 
 /// The dimension a `dimensions/<namespace>/<path>` folder belongs to: the
 /// world folder and the dimension id, for a folder [`crate::save::dimension_dir`]
@@ -120,8 +91,11 @@ pub fn era_dimension_root(
     // A saved world's own level.dat decides its format; the content root only
     // chooses one for a world not saved yet.
     let era = match crate::save::read_dat(&world.join("level.dat")) {
-        Some(root) => root.get("Data").is_some_and(is_1_7_10_level_data),
-        None => items.is_some_and(is_1_7_10_content),
+        Some(root) => root.get("Data").is_some_and(|data| {
+            sunrise_core::profile::Profile::of_level_data(data)
+                == sunrise_core::profile::Profile::V1_7_10
+        }),
+        None => items.is_some_and(|items| items.profile == sunrise_core::profile::Profile::V1_7_10),
     };
     if !era {
         return None;
@@ -1509,7 +1483,10 @@ mod tests {
             ]),
         );
         let data = level_data(&level, None, Some(player), 1_700_000_000_000);
-        assert!(is_1_7_10_level_data(&Tag::Compound(data.clone())));
+        assert_eq!(
+            sunrise_core::profile::Profile::of_level_data(&Tag::Compound(data.clone())),
+            sunrise_core::profile::Profile::V1_7_10
+        );
         crate::save::write_dat(
             &dir.join("level.dat"),
             Tag::compound([("Data", Tag::Compound(data.clone()))]),
@@ -1542,7 +1519,10 @@ mod tests {
             Some(Tag::Compound(data)) => data.clone(),
             _ => panic!("no Data"),
         };
-        assert!(is_1_7_10_level_data(&Tag::Compound(written.clone())));
+        assert_eq!(
+            sunrise_core::profile::Profile::of_level_data(&Tag::Compound(written.clone())),
+            sunrise_core::profile::Profile::V1_7_10
+        );
         for key in [
             "RandomSeed",
             "Time",

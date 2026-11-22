@@ -76,7 +76,7 @@ fn a_tall_column_streams_lights_and_meshes_to_its_top() {
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
         tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility, None).unwrap()),
-        light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
+        light: Arc::new(LightTables::load(&root, assets.registry, &facts, assets.profile).unwrap()),
         biomes: Arc::new(
             Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
                 root.to_path_buf(),

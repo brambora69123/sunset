@@ -7,11 +7,11 @@
 //! with the sprite each face registers ([`sunset17_assets`]) and the era's own
 //! light and tint model.
 //!
-//! The era's render assets are picked by the resource root's own marker (the
-//! one the font and HUD loaders read, `sunset17_assets::is_source`), and the
-//! mesher's path by the content: a registry whose states carry a `meta`
-//! property is the era's export (`BlockRegistry`'s rows for 26.3 never do). No
-//! 26.3 state takes the era path, so the 26.3 path never changes.
+//! The era's render assets are picked by the resource root's profile (the one
+//! the font and HUD loaders read), and the mesher's path by the same profile:
+//! [`Profile::V1_7_10`](sunrise_core::profile::Profile::V1_7_10) selects the
+//! content export's `meta` rows, [`Profile::Modern`] never does. No 26.3 state
+//! takes the era path, so the 26.3 path never changes.
 //!
 //! - [`blocks`]: the era block facts (shape, culling, tint) read by name.
 //! - [`render`]: the ported `RenderBlocks` and its vertex stream.
@@ -228,7 +228,7 @@ impl Colormaps {
 /// block rows and the era's colormaps.
 #[derive(Clone, Debug)]
 pub struct EraRenderAssets {
-    /// Every block row of `assets-1.7.10.json`: the numeric id and name.
+    /// Every block row of the era extraction's manifest: the numeric id and name.
     pub blocks: Vec<crate::sunset17_assets::BlockRow>,
     /// The layer `grass_side_overlay` sits on, when the atlas has it.
     pub overlay_layer: Option<u16>,
@@ -400,19 +400,11 @@ pub(super) fn mesh(input: MeshInput<'_>, out: &mut SectionMesh) {
     }
 }
 
-/// Whether a registry is the era's content export: every state carries the
-/// `meta` property, which no 26.3 state has.
-pub fn is_era_registry(assets: &Assets) -> bool {
-    assets
-        .registry
-        .state(BlockStateId(0))
-        .is_some_and(|state| state.properties.contains_key("meta"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assets::Properties;
+    use sunrise_core::profile::Profile;
     use sunrise_items::blocks::BlockFacts;
     use sunrise_world::registry::BlockRegistry;
 
@@ -422,29 +414,26 @@ mod tests {
         ))
     }
 
-    fn assets(registry: &'static BlockRegistry) -> Assets {
+    fn assets(registry: &'static BlockRegistry, profile: Profile) -> Assets {
         Assets {
             registry,
+            profile,
             properties: Properties::for_tests(&[(false, false, true, false)]),
             material_states: [BlockStateId(0); 6],
             blocks_fluid_flow: Default::default(),
         }
     }
 
-    /// The 1.7.10 content export carries `meta` on every state; no 26.3 state
-    /// has that property, so the era mesher cannot claim one.
+    /// The era mesher runs only under the era profile; the registry's shape
+    /// does not select it on its own.
     #[test]
-    fn only_the_eras_registry_carries_a_meta_property() {
+    fn the_era_mesher_runs_for_the_era_profile_only() {
         let era = registry(
             r#"{"defaults":{"minecraft:stone":0},"states":[
                 ["stone",false,false,"",{"id":"minecraft:stone","properties":{"meta":"0"}}]]}"#,
         );
-        assert!(is_era_registry(&assets(era)));
-        let modern = registry(
-            r#"{"defaults":{"minecraft:stone":0},"states":[
-                ["stone",false,false,"",{"id":"minecraft:stone","properties":{"axis":"x"}}]]}"#,
-        );
-        assert!(!is_era_registry(&assets(modern)));
+        assert_eq!(assets(era, Profile::V1_7_10).profile, Profile::V1_7_10);
+        assert_eq!(assets(era, Profile::Modern).profile, Profile::Modern);
     }
 
     /// The prepared 1.7.10 folder, when this machine has one (CI does not).
@@ -452,7 +441,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../")
             .join(crate::sunset17_assets::DEFAULT_DIR);
-        crate::sunset17_assets::detect(&root).then_some(root)
+        (Profile::of_resource_root(&root).ok() == Some(Profile::V1_7_10)).then_some(root)
     }
 
     /// The real content export's every state finds the era block, id and six
@@ -473,6 +462,7 @@ mod tests {
         properties[0] = (true, false, false, false);
         let assets = Assets {
             registry,
+            profile: Profile::V1_7_10,
             properties: Properties::for_tests(&properties),
             material_states: [BlockStateId(0); 6],
             blocks_fluid_flow: Default::default(),
@@ -589,7 +579,8 @@ mod tests {
                 colormaps: Colormaps::default(),
             }),
         };
-        let table = StateTable17::era(&assets(registry), &render, &[0, 0]).unwrap();
+        let table =
+            StateTable17::era(&assets(registry, Profile::V1_7_10), &render, &[0, 0]).unwrap();
         let slab = table.get(1);
         assert_eq!(slab.block.kind, blocks::Kind::Slab { double: false });
         assert_eq!(slab.meta, 8);

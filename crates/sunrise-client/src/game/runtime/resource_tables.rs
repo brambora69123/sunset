@@ -353,6 +353,7 @@ impl PackResources {
         .map(Arc::new);
         // Each item's own default name, which the hover name reads as `getDescriptionId` does.
         let names = names.with_item_names(&item_renderer.models.prototypes, assets.registry);
+        let profile = assets.profile;
         Ok(Self {
             layer_names: Arc::new(sunrise_client::block_sprites::texture_names(
                 &render.sprite_layers,
@@ -383,7 +384,7 @@ impl PackResources {
             polytone_particles,
             polytone_post,
             polytone_colors: Arc::new(read_colors(root)),
-            era_ui: crate::game::era_ui::ui_era(root.source()),
+            profile,
         })
     }
 }

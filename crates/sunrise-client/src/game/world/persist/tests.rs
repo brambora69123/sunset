@@ -535,7 +535,13 @@ fn comparator_and_hopper_live_state_survives_chunk_reload() {
             .get("TransferCooldown"),
         Some(&Tag::Int(22))
     );
-    let restored = save::decode(&encoded, game.pack.assets.registry, world_biomes!(game)).unwrap();
+    let restored = save::decode(
+        &encoded,
+        game.pack.assets.registry,
+        world_biomes!(game),
+        game.pack.profile,
+    )
+    .unwrap();
     game.world.block_entities.clear();
     for (p, entity) in &restored.block_entities {
         game.world.block_entities.insert(*p, entity.clone());

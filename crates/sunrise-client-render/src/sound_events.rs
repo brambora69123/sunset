@@ -251,7 +251,7 @@ impl SoundRegistry {
         }
         // A 1.7.10 root's own table names its block sounds `dig.*`/`step.*`; the era module
         // adds the engine ids that ask for them. 26.3's roots keep their ids unchanged.
-        if crate::sunset17_assets::is_source(root) {
+        if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             crate::sound_1_7_10::add_engine_events(&mut registry);
         }
         registry

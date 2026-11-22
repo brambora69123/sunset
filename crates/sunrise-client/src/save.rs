@@ -263,10 +263,10 @@ pub fn upgrade_older_world_with(
     };
     // A 1.7.10 world is read and written by `save_1_7_10`; no DataFixer
     // applies to it, and none could name its fields.
-    if root
-        .get("Data")
-        .is_some_and(save_1_7_10::is_1_7_10_level_data)
-    {
+    if root.get("Data").is_some_and(|data| {
+        sunrise_core::profile::Profile::of_level_data(data)
+            == sunrise_core::profile::Profile::V1_7_10
+    }) {
         return Ok(());
     }
     let version = root.get("Data").map_or(i64::from(DATA_VERSION), |d| {
@@ -299,7 +299,9 @@ pub fn needs_file_fixes(world: &Path) -> bool {
         return false;
     };
     // 1.7.10's files are read as they are, not fixed up.
-    if save_1_7_10::is_1_7_10_level_data(data) {
+    if sunrise_core::profile::Profile::of_level_data(data)
+        == sunrise_core::profile::Profile::V1_7_10
+    {
         return false;
     }
     let version = number(data.get("DataVersion")).unwrap_or(-1);
@@ -1313,7 +1315,7 @@ fn encode_full(
 ) -> NamedTag {
     // The 1.7.10 content root stores the era's chunk form; the block ids it
     // names are the era export's rows, which the 26.3 palette cannot carry.
-    if save_1_7_10::registry_is_1_7_10(registry) {
+    if items.profile == sunrise_core::profile::Profile::V1_7_10 {
         return save_1_7_10::encode(
             chunk,
             shape.sky_light,
@@ -1688,8 +1690,13 @@ const GENERATED_KEYS: [&str; 14] = [
     "entities",
     "CarvingMask",
 ];
-pub fn decode(root: &NamedTag, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
-    decode_with(root, registry, biomes, None, ColumnLayout::VANILLA)
+pub fn decode(
+    root: &NamedTag,
+    registry: &BlockRegistry,
+    biomes: &Biomes,
+    profile: sunrise_core::profile::Profile,
+) -> Option<Chunk> {
+    decode_with(root, registry, biomes, None, ColumnLayout::VANILLA, profile)
 }
 /// Only full chunks load here; partially generated ones (vanilla's world
 /// border of proto chunks) resume generation through `decode_proto`.
@@ -1699,11 +1706,12 @@ pub fn decode_with(
     biomes: &Biomes,
     tables: Option<&SaveTables>,
     layout: ColumnLayout,
+    profile: sunrise_core::profile::Profile,
 ) -> Option<Chunk> {
     // A 1.7.10 chunk is the era's `Level` compound; without the era content
     // root its block ids name other blocks, so it cannot be read.
     if save_1_7_10::is_1_7_10_chunk(&root.tag) {
-        if !save_1_7_10::registry_is_1_7_10(registry) {
+        if profile != sunrise_core::profile::Profile::V1_7_10 {
             log::warn!(
                 "Sunrise: a 1.7.10 chunk needs the 1.7.10 content root; open the world with \
                  `--resources {}`",
@@ -1892,7 +1900,7 @@ pub fn encode_proto(
     shape: LevelShape,
     items: &crate::items::Items,
 ) -> NamedTag {
-    if save_1_7_10::registry_is_1_7_10(registry) {
+    if items.profile == sunrise_core::profile::Profile::V1_7_10 {
         return save_1_7_10::encode_proto(
             &proto.column,
             shape.sky_light,
@@ -2603,6 +2611,14 @@ impl SaveDir {
             era,
         }
     }
+    /// The profile this save's format follows.
+    fn profile(&self) -> sunrise_core::profile::Profile {
+        if self.era {
+            sunrise_core::profile::Profile::V1_7_10
+        } else {
+            sunrise_core::profile::Profile::Modern
+        }
+    }
     fn items_for_save(&self) -> Result<&Arc<crate::items::Items>> {
         self.items
             .as_ref()
@@ -2611,8 +2627,13 @@ impl SaveDir {
     /// A 1.7.10 world's chunks are the era's form, which only the era content
     /// root's block ids can fill in: saving one with other resources would
     /// write 26.3 chunks over the era's. Refused rather than overwritten.
-    fn check_chunk_format(&self, registry: &BlockRegistry) -> Result<()> {
-        if self.era && !save_1_7_10::registry_is_1_7_10(registry) {
+    fn check_chunk_format(&self) -> Result<()> {
+        if self.era
+            && self
+                .items
+                .as_ref()
+                .is_none_or(|items| items.profile != sunrise_core::profile::Profile::V1_7_10)
+        {
             return Err(format!(
                 "{} is a 1.7.10 world; open it with `--resources {}` so its chunks keep their \
                  format",
@@ -2950,7 +2971,11 @@ impl SaveDir {
         };
         let tables = self.tables.get().map(|t| &**t);
         let decoded = if save_1_7_10::is_1_7_10_chunk(&root.tag) {
-            if !save_1_7_10::registry_is_1_7_10(registry) {
+            if self
+                .items
+                .as_ref()
+                .is_none_or(|items| items.profile != sunrise_core::profile::Profile::V1_7_10)
+            {
                 log::warn!(
                     "Sunrise: a 1.7.10 chunk needs the 1.7.10 content root; open the world with \
                      `--resources {}`",
@@ -2965,7 +2990,14 @@ impl SaveDir {
                 &save_1_7_10::biome_map(biomes),
             )
         } else {
-            decode_with(&root, registry, biomes, tables, self.shape.column())
+            decode_with(
+                &root,
+                registry,
+                biomes,
+                tables,
+                self.shape.column(),
+                self.profile(),
+            )
         };
         let Some(mut chunk) = decoded else {
             return Ok(None);
@@ -2999,7 +3031,7 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<()> {
-        self.check_chunk_format(registry)?;
+        self.check_chunk_format()?;
         biomes.ensure_saveable()?;
         let encoding = Arc::new(Encoding {
             items: self.items_for_save()?.clone(),
@@ -3036,7 +3068,7 @@ impl SaveDir {
         registry: &BlockRegistry,
         biomes: &Biomes,
     ) -> Result<usize> {
-        self.check_chunk_format(registry)?;
+        self.check_chunk_format()?;
         biomes.ensure_saveable()?;
         let items = self.items_for_save()?;
         if let Some(result) = self.save_disk_sync(chunks, registry, biomes, items) {
@@ -3098,7 +3130,7 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<usize> {
-        self.check_chunk_format(registry)?;
+        self.check_chunk_format()?;
         let encoding = self.encoding_for_save_later(chunks, registry, biomes)?;
         let records = chunks
             .iter()
@@ -4104,7 +4136,9 @@ impl Level {
         // keeps the seed, the preset and `MapFeatures` in level.dat itself),
         // so the settings the engine's generator needs are made from those
         // fields on every open rather than stored.
-        if save_1_7_10::is_1_7_10_level_data(data) {
+        if sunrise_core::profile::Profile::of_level_data(data)
+            == sunrise_core::profile::Profile::V1_7_10
+        {
             save_1_7_10::read_level(&mut level, data);
             if level.generator.is_none() {
                 level.generator = Some(WorldGenerator {
@@ -4546,7 +4580,7 @@ impl Level {
     /// keeps it at `playerdata/<uuid>.dat`, as `AlphaWorldStorage.savePlayerData`
     /// writes it.
     pub fn write_player(&mut self, dir: &Path, items: &crate::items::Items) -> Result<()> {
-        let era = save_1_7_10::is_1_7_10_content(items);
+        let era = items.profile == sunrise_core::profile::Profile::V1_7_10;
         self.write_player_file(dir, Some(items), era)
     }
 
@@ -4596,9 +4630,11 @@ impl Level {
         // 1.7.10 has no `data/` side files for Sunrise's own state. A saved
         // world's own file decides its format; an era content root only
         // starts a world that has no `level.dat` yet.
-        if save_1_7_10::is_1_7_10_level_data(&data)
+        if sunrise_core::profile::Profile::of_level_data(&data)
+            == sunrise_core::profile::Profile::V1_7_10
             || (matches!(&data, Tag::Compound(map) if map.is_empty())
-                && items.is_some_and(save_1_7_10::is_1_7_10_content))
+                && items
+                    .is_some_and(|items| items.profile == sunrise_core::profile::Profile::V1_7_10))
         {
             let player = if keep_legacy_player {
                 data.get("Player").and_then(|p| match p {
@@ -6166,7 +6202,7 @@ mod tests {
             panic!("structures")
         };
         structures.insert("starts".into(), starts.clone());
-        let loaded = decode(&saved, assets.registry, &biomes).expect("chunk");
+        let loaded = decode(&saved, assets.registry, &biomes, assets.profile).expect("chunk");
         let Tag::Compound(expected) = &starts else {
             unreachable!()
         };
@@ -6257,7 +6293,7 @@ mod tests {
         extras.block_entity_attachments.push((pos, block_data));
         chunk.saved = Some(Arc::new(extras));
         let saved = encode(&chunk, assets.registry, &biomes, &Default::default());
-        let mut loaded = decode(&saved, assets.registry, &biomes).expect("chunk");
+        let mut loaded = decode(&saved, assets.registry, &biomes, assets.profile).expect("chunk");
         assert_eq!(
             key.get(
                 &mut Arc::make_mut(loaded.saved.as_mut().unwrap()).attachments,
@@ -6406,6 +6442,7 @@ mod tests {
             &biomes,
             Some(&tables),
             shape.column(),
+            assets.profile,
         )
         .expect("decodes");
         assert_eq!(back.sections.len(), 131);
@@ -6418,6 +6455,7 @@ mod tests {
             &biomes,
             Some(&tables),
             ColumnLayout::VANILLA,
+            assets.profile,
         )
         .expect("decodes");
         assert_eq!(short.sections.len(), SECTIONS);
@@ -6457,6 +6495,7 @@ mod tests {
             &biomes,
             None,
             ColumnLayout::VANILLA,
+            assets.profile,
         )
         .expect("chunk");
         let positions: Vec<(i32, i32, i32)> =
@@ -6937,7 +6976,14 @@ mod tests {
                 std::hint::black_box(far());
             }));
             load_time = load_time.min(time(&|| {
-                std::hint::black_box(decode_with(&saved, assets.registry, &biomes, None, layout));
+                std::hint::black_box(decode_with(
+                    &saved,
+                    assets.registry,
+                    &biomes,
+                    None,
+                    layout,
+                    assets.profile,
+                ));
             }));
         }
         // Measured, optimized and not: 3 to 8 loads (the light layers come on
@@ -8633,7 +8679,7 @@ mod tests {
             assert!(section.get("block_states").is_none());
             assert!(section.get("biomes").is_none());
         }
-        let mut loaded = decode(&saved, assets.registry, &biomes).unwrap();
+        let mut loaded = decode(&saved, assets.registry, &biomes, assets.profile).unwrap();
         load_light(&saved.tag, &mut loaded, true);
         assert_eq!(loaded.light(0, MIN_Y - 1, 0), 0x75);
         assert_eq!(loaded.light(1, MIN_Y - 1, 0), 0x25);

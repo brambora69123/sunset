@@ -186,7 +186,7 @@ impl MotionResources {
         facts: &crate::blocks::BlockFacts,
         conditions: &sunrise_world::conditions::LoadConditions,
     ) -> Result<Self> {
-        if crate::sunset17_assets::detect(root) {
+        if assets.profile == sunrise_core::profile::Profile::V1_7_10 {
             return Self::load_1_7_10(assets, facts);
         }
         let attributes = Arc::new(Catalog::from_json(&sunrise_world::json_file::read(

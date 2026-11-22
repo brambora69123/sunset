@@ -17,6 +17,9 @@ pub(super) struct WorldRequest {
 
 pub(super) struct PreparedWorld {
     pub save_root: PathBuf,
+    /// The profile the world plays under: the resource root's, agreed with
+    /// the saved world's own format (`Profile::resolve`).
+    pub profile: sunrise_core::profile::Profile,
     /// The levels' shapes, from the world's dimension types.
     pub shapes: sunrise_client::chunk::LevelShapes,
     pub level: Level,
@@ -153,6 +156,14 @@ impl WorldRequest {
                 .as_deref()
                 .unwrap_or(std::path::Path::new(".")),
         )?;
+        // The world's own `level.dat` wins over the resource root for the
+        // session's rules; a 1.7.10 world opened with 26.3 resources (or the
+        // other way round) is refused here, before anything writes.
+        let world_profile = sunrise_client::save::read_dat(&save_root.join("level.dat"))
+            .and_then(|root| root.get("Data").cloned())
+            .map(|data| sunrise_core::profile::Profile::of_level_data(&data));
+        let profile = sunrise_core::profile::Profile::resolve(pack.profile, world_profile)
+            .map_err(|error| error.to_string())?;
         sunrise_client::save::upgrade_older_world_with(&save_root, upgrade)?;
         sunrise_client::save::migrate_legacy(&save_root)?;
         let session_lock = sunrise_client::save::SessionLock::acquire(&save_root)?;
@@ -350,6 +361,7 @@ impl WorldRequest {
         }
         Ok(PreparedWorld {
             save_root,
+            profile,
             shapes,
             level,
             world,

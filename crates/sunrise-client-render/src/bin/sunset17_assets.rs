@@ -13,6 +13,7 @@ use sunrise_client_render::{
     sprites::Sprites,
     sunset17_assets::{self, FACE_BOTTOM, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_TOP, FACE_WEST},
 };
+use sunrise_core::profile::Profile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::args()
@@ -20,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("SUNSET_1_7_CONTENT").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(sunset17_assets::DEFAULT_DIR));
-    if !sunset17_assets::detect(&root) {
+    if Profile::of_resource_root(&root)? != Profile::V1_7_10 {
         return Err(format!(
             "{} is not a prepared 1.7.10 root: no {}",
             root.display(),

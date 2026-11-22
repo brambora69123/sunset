@@ -14,6 +14,7 @@ use crate::{
 use serde_json::Value;
 use std::{collections::HashMap, fs, io, path::Path, sync::Arc};
 use sunrise_core::geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape};
+use sunrise_core::profile::Profile;
 #[path = "data/cache.rs"]
 mod cache;
 pub(super) use cache::set_dir as set_cache_dir;
@@ -766,7 +767,8 @@ fn build_with_gameplay<G: GameplayStateSource>(
     gameplay_states: &[G],
 ) -> io::Result<Behaviours> {
     let mut table = StateTable::new(registry)?;
-    let era = super::era::detect(root, registry);
+    let era =
+        Profile::of_resource_root(root).map_err(|e| invalid(e.to_string()))? == Profile::V1_7_10;
     if era {
         super::era::install_properties(&mut table);
     }
@@ -1784,7 +1786,11 @@ mod tests {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(era::MANIFEST), b"{}").unwrap();
+        std::fs::write(
+            dir.join(sunrise_core::profile::ERA_MANIFEST),
+            br#"{"minecraft":"1.7.10"}"#,
+        )
+        .unwrap();
 
         // Every block `Named` needs, plus the blocks whose metadata-backed
         // properties this test reads.

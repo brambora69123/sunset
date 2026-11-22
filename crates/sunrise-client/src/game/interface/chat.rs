@@ -732,11 +732,12 @@ impl Game<'_> {
         }
         let dirs = [self.options.resources.clone(), self.ui.vanilla_root.clone()];
         let registry = self.pack.assets.registry;
+        let profile = self.pack.profile;
         let spawned = std::thread::Builder::new()
             .name("Registries preload".into())
             .spawn(move || {
                 sunrise_threads::behind_server();
-                super::remote::builtin_registries(&dirs[0]);
+                super::remote::builtin_registries(&dirs[0], profile);
                 resource_ids(&dirs[0]);
                 block_properties(registry);
                 for dir in &dirs {

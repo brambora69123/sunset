@@ -31,7 +31,11 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
     // Populate the same Parts registry epoch that the resource fixture will use.
     crate::game::api_values::register_game_keys([]);
-    crate::game::mods::register_iterated_registries(&root).unwrap();
+    crate::game::mods::register_iterated_registries(
+        &root,
+        sunrise_core::profile::Profile::of_resource_root(&root).unwrap(),
+    )
+    .unwrap();
     let settings = Settings::default();
     let loaded = load_resources(
         sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),

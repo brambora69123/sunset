@@ -15,13 +15,11 @@
 //! `java.util.Random` seeded with `ticks * 312871` (line 466), drawn in
 //! vanilla's order.
 //!
-//! The era's UI is selected by the same content-root marker as the era asset
-//! loader ([`era_ui`], `sunset17_assets::is_source`); 26.3 keeps [`crate::hud_layout`].
+//! The era's UI is selected by the content root's profile
+//! ([`sunrise_core::profile::Profile::V1_7_10`]); 26.3 keeps
+//! [`crate::hud_layout`].
 
-use crate::{
-    hud::{HudAtlas, HudBatch, Rect, rgba},
-    resource_source::ResourceSource,
-};
+use crate::hud::{HudAtlas, HudBatch, Rect, rgba};
 use smallvec::SmallVec;
 use sunrise_core::random::{LegacyRandom, RandomSource};
 
@@ -795,13 +793,6 @@ impl Hud17 {
             );
         }
     }
-}
-
-/// Whether a content root is the era's, so the caller draws this HUD and the
-/// screens in [`crate::screens_1_7_10`] instead of the 26.3 UI. The marker is
-/// the era asset loader's (`sunset17_assets::is_source`).
-pub fn era_ui(source: &ResourceSource) -> bool {
-    crate::sunset17_assets::is_source(source)
 }
 
 /// Draws the HUD's sprites, fills and text with the frame's batch.

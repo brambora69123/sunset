@@ -1298,7 +1298,7 @@ impl HudAtlas {
     ) -> Result<Self> {
         // 1.7.10 has no atlas definitions, model sprites or font definitions: its GUI is a
         // folder of screens and its font is `ascii.png` plus the unicode pages.
-        if crate::sunset17_assets::is_source(root) {
+        if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             return Self::build_1_7_10(root, defaults);
         }
         // A reload back to a 26.3 root drops the era's cloud texture.

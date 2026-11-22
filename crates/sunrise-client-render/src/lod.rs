@@ -4184,7 +4184,12 @@ mod tests {
         let render = Arc::new(assets.reload(&resource_root)?);
         let facts = BlockFacts::load(&root, assets.registry)?;
         let context = WorkerContext {
-            light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+            light: Arc::new(LightTables::load(
+                &root,
+                assets.registry,
+                &facts,
+                assets.profile,
+            )?),
             tables: Arc::new(MeshTables::new(
                 &assets,
                 &render,
@@ -4269,7 +4274,12 @@ mod tests {
             None,
         )?);
         let context = Arc::new(WorkerContext {
-            light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+            light: Arc::new(LightTables::load(
+                &root,
+                assets.registry,
+                &facts,
+                assets.profile,
+            )?),
             tables,
             assets: assets.clone(),
             render,
@@ -5475,7 +5485,12 @@ mod tests {
             None,
         )?);
         let context = Arc::new(WorkerContext {
-            light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+            light: Arc::new(LightTables::load(
+                &root,
+                assets.registry,
+                &facts,
+                assets.profile,
+            )?),
             tables,
             assets,
             render,

@@ -168,7 +168,11 @@ mod tests {
         with_game(|game| {
             let _mods = game_thread();
             // Installing the capability fixture replaces the registry snapshot.
-            crate::game::mods::register_iterated_registries(&game.options.resources).unwrap();
+            crate::game::mods::register_iterated_registries(
+                &game.options.resources,
+                game.pack.profile,
+            )
+            .unwrap();
             game.options.dedicated = Some(Vec::new());
             game.world
                 .chunks

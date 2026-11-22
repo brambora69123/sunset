@@ -132,7 +132,7 @@ fn main() -> Result<()> {
         root.to_path_buf(),
     ))?;
     step("biomes");
-    let light = LightTables::load(&root, assets.registry, &facts)?;
+    let light = LightTables::load(&root, assets.registry, &facts, assets.profile)?;
     step("light tables");
     let tables = MeshTables::new(
         &assets,
