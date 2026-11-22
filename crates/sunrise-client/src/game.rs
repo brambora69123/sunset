@@ -4391,27 +4391,35 @@ impl Game<'_> {
                     self.pending
                         .record_source(pos, spill::source_snapshot(saved, name, lock.as_ref()));
                 }
-                let stacks = self.block_loot_at(pos, state, held.as_ref());
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
-                // Block.dropResources: the item entities, then spawnAfterBreak's
-                // experience, with the mods' say between the two.
-                let breaker = Some(self.native_acting_id());
-                let dropped = self.player_block_dropped(
-                    (pos, state),
-                    (breaker, held.as_ref(), live),
-                    (stacks, exp_to_drop),
-                );
-                let canceled = dropped.canceled;
-                if let Some(kept) = self.break_collect.as_mut() {
-                    kept.extend(dropped.items.into_iter().map(|item| item.stack));
-                    if dropped.experience > 0 {
-                        self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), dropped.experience);
-                    }
+                let canceled = if self.era_drops() {
+                    // The era export has no loot tables: 1.7.10's own
+                    // `Block.afterMinedByPlayer` rolls the items and the xp.
+                    self.era_block_destroyed(pos, state, held.as_ref());
+                    false
                 } else {
-                    self.spawn_block_drops(pos, dropped);
-                }
+                    let stacks = self.block_loot_at(pos, state, held.as_ref());
+                    // Block.dropResources: the item entities, then spawnAfterBreak's
+                    // experience, with the mods' say between the two.
+                    let breaker = Some(self.native_acting_id());
+                    let dropped = self.player_block_dropped(
+                        (pos, state),
+                        (breaker, held.as_ref(), live),
+                        (stacks, exp_to_drop),
+                    );
+                    let canceled = dropped.canceled;
+                    if let Some(kept) = self.break_collect.as_mut() {
+                        kept.extend(dropped.items.into_iter().map(|item| item.stack));
+                        if dropped.experience > 0 {
+                            self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), dropped.experience);
+                        }
+                    } else {
+                        self.spawn_block_drops(pos, dropped);
+                    }
+                    canceled
+                };
                 // BeehiveBlock.playerDestroy: silk touch keeps the bees in, so
                 // the trigger counts them; otherwise they are out already.
                 if let Some((hive, (honey, facing))) = hive {
