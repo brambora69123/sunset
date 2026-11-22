@@ -1126,7 +1126,8 @@ mod tests {
                 "assets/minecraft/textures/entity/pig/pig.png".into(),
                 Resource::bytes(Vec::new()),
             ),
-        ]));
+        ]))
+        .with_profile(sunrise_core::profile::Profile::V1_7_10);
         let pig = Arc::new(plane("root", vec![plane("head", vec![])]));
         let vanilla: HashMap<&str, (&Arc<Part>, &str)> = [("pig#main", (&pig, "minecraft:pig"))]
             .into_iter()
