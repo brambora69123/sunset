@@ -36,8 +36,10 @@
 //!   `dropItem` returns before them.
 //! * No block entity contents: a broken container's contents spill through the
 //!   engine's own container path.
-//! * `InfestedBlock`'s silverfish and `IceBlock`'s melt-back are the removal's
-//!   own side effects, not drops.
+//! * `InfestedBlock`'s silverfish: 1.7.10 spawns it from `dropItems`, but the
+//!   era export has no `minecraft:silverfish` entity type yet, so the break
+//!   leaves nothing behind (its drops, none, are right). `IceBlock`'s
+//!   melt-back is the removal's own side effect.
 use sunrise_core::random::RandomSource;
 
 /// The held stack's facts the drop rules read (`EnchantmentHelper` and the
