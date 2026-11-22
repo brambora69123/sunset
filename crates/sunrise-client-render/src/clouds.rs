@@ -347,7 +347,10 @@ fn era_fancy(
     let z = input.camera.z / 12.0 + 0.33;
     let cell_x = x.floor() as i64;
     let cell_z = z.floor() as i64;
-    let top = bottom + 4.0 - EPS;
+    // The mesh is camera-relative in x/z but layer-relative in y: the uniform
+    // adds the layer's world height (`hz_v_pos + hz_cloud_offset.xyz`), so the
+    // quads sit at 0..4 here. `bottom` only decides which faces exist.
+    let top = 4.0 - EPS;
     // The cell's texel block in the 256x256 sheet, wrapped the way the sheet repeats.
     let texel = |cell: i64, offset: i64| (cell + offset).rem_euclid(256) as f32;
     for dz in -3..=4 {
@@ -375,12 +378,7 @@ fn era_fancy(
             if bottom > -5.0 {
                 push_quad_uvs(
                     vertices,
-                    [
-                        [x0, bottom, z0],
-                        [x1, bottom, z0],
-                        [x1, bottom, z1],
-                        [x0, bottom, z1],
-                    ],
+                    [[x0, 0.0, z0], [x1, 0.0, z0], [x1, 0.0, z1], [x0, 0.0, z1]],
                     1,
                     [0, -127, 0, 0],
                     [
@@ -400,12 +398,7 @@ fn era_fancy(
                     for (v0, v1, y0, y1) in era_side_rows(tv) {
                         push_quad_uvs(
                             vertices,
-                            [
-                                [x, bottom + y0, z1],
-                                [x, bottom + y1, z1],
-                                [x, bottom + y1, z0],
-                                [x, bottom + y0, z0],
-                            ],
+                            [[x, y0, z1], [x, y1, z1], [x, y1, z0], [x, y0, z0]],
                             3,
                             [-127, 0, 0, 0],
                             [
@@ -422,12 +415,7 @@ fn era_fancy(
                     for (v0, v1, y0, y1) in era_side_rows(tv) {
                         push_quad_uvs(
                             vertices,
-                            [
-                                [x, bottom + y0, z0],
-                                [x, bottom + y1, z0],
-                                [x, bottom + y1, z1],
-                                [x, bottom + y0, z1],
-                            ],
+                            [[x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1]],
                             3,
                             [127, 0, 0, 0],
                             [
@@ -444,7 +432,7 @@ fn era_fancy(
                     let z = z0 + k as f32 * 12.0;
                     push_quad_uvs(
                         vertices,
-                        [[x0, top, z], [x1, top, z], [x1, bottom, z], [x0, bottom, z]],
+                        [[x0, top, z], [x1, top, z], [x1, 0.0, z], [x0, 0.0, z]],
                         2,
                         [0, 0, -127, 0],
                         [
@@ -459,7 +447,7 @@ fn era_fancy(
                     let z = z1 - EPS - k as f32 * 12.0;
                     push_quad_uvs(
                         vertices,
-                        [[x0, bottom, z], [x1, bottom, z], [x1, top, z], [x0, top, z]],
+                        [[x0, 0.0, z], [x1, 0.0, z], [x1, top, z], [x0, top, z]],
                         2,
                         [0, 0, 127, 0],
                         [
@@ -521,7 +509,7 @@ fn era_fast(
                     [z0, z1],
                     [(z0 + z as f32) / 2048.0, (z1 + z as f32) / 2048.0],
                 ),
-                bottom,
+                0.0,
                 uv,
             );
         }
@@ -1251,9 +1239,10 @@ mod tests {
         assert!(!vertices.is_empty());
         let ys = vertices.iter().map(|v| v.pos[1]);
         let (min, max) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
-        assert!((min - 58.33).abs() < 1e-4);
+        // Layer-relative: the uniform's y places the layer at 58.33 above the camera.
+        assert!(min.abs() < 1e-4);
         // The slices reach the layer's full 4 blocks; the top face sits 1/1024 below.
-        assert!((max - (58.33 + 4.0)).abs() < 1e-4);
+        assert!(max <= 4.0 && max > 4.0 - 2e-3, "top face at {max}");
         // Eight groups each way: from -3*96 to (4+1)*96, 768 blocks across.
         let xs = vertices
             .iter()
@@ -1282,7 +1271,7 @@ mod tests {
             .map(|v| v.pos[0])
             .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
         assert_eq!(xs, (-256.0, 256.0));
-        assert!(vertices.iter().all(|v| v.pos[1] == 58.33));
+        assert!(vertices.iter().all(|v| v.pos[1] == 0.0));
         assert!(
             vertices
                 .iter()
