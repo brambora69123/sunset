@@ -48,8 +48,8 @@ pub use sunrise_prepare::assets_1_7_10::{
 };
 /// The era's entity models and types, transcribed from its `Model*` and entity classes.
 pub use sunrise_prepare::entities_1_7_10::{
-    Bone, Cube, EntityType, Model, TextureName, bake_models, bake_types, entity_types, models,
-    textures,
+    Bone, Cube, EntityType, Model, TextureName, bake_models, bake_types, entity_types,
+    model_space_bounds, models, textures,
 };
 /// The baked part trees the engine loads with the era's entity types.
 pub use sunrise_prepare::entities_1_7_10::{
