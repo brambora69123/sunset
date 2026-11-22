@@ -216,12 +216,13 @@ pub fn fog_brightness(sky_light: f32, view_distance_chunks: i32) -> f32 {
     brightness * (1.0 - view) + view
 }
 
-/// `WorldRenderer.renderClouds`'s cloud plane height: 128 above the overworld, 8 in the End.
+/// `WorldRenderer.renderClouds`'s cloud plane bottom: `getCloudHeight() + 0.33`
+/// (`128.33` above the overworld, `8.33` in the End), matching 26.3's `CLOUD_HEIGHT` convention.
 pub fn cloud_height(dimension: &str) -> f32 {
     if matches!(dimension, "the_end" | "minecraft:the_end") {
-        8.0
+        8.33
     } else {
-        128.0
+        128.33
     }
 }
 
@@ -407,7 +408,7 @@ mod tests {
         assert_eq!(sun_angle(0.0), 0.0);
         assert_eq!(sun_angle(0.25), 90.0);
         assert_eq!(sun_angle(0.5), 180.0);
-        assert_eq!(cloud_height("minecraft:overworld"), 128.0);
-        assert_eq!(cloud_height("minecraft:the_end"), 8.0);
+        assert_eq!(cloud_height("minecraft:overworld"), 128.33);
+        assert_eq!(cloud_height("minecraft:the_end"), 8.33);
     }
 }

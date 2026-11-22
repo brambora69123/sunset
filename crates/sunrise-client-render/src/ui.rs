@@ -17,6 +17,21 @@ pub struct NineSlice {
     border: [u32; 4],
     stretch_inner: bool,
 }
+impl NineSlice {
+    pub(crate) const fn new(
+        width: u32,
+        height: u32,
+        border: [u32; 4],
+        stretch_inner: bool,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            border,
+            stretch_inner,
+        }
+    }
+}
 /// A `gui.scaling` section of type `nine_slice`.
 pub(crate) fn parse_nine_slice(v: &serde_json::Value) -> Option<NineSlice> {
     let s = &v["gui"]["scaling"];
@@ -1107,12 +1122,28 @@ fn tooltip_box(
     h: f32,
 ) {
     crate::widgets::frame_tooltip(lines);
-    tooltip_sprites(
+    let sprites = tooltip_sprites(
         batch,
         atlas,
         ["tooltip/background", "tooltip/frame"],
         [x, y, w, h],
     );
+    if !sprites && atlas.era {
+        // `GuiScreen.drawHoveringText`: 1.7.10 has no `tooltip/background` sprite, so the
+        // era's box is drawn with fills, not a nine-slice.
+        let bg = rgba(0x10, 0x00, 0x10, 0xF0);
+        let top = rgba(0x50, 0x00, 0xFF, 0x50);
+        let bottom = rgba(0x28, 0x00, 0x7F, 0x50);
+        batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 1.0, bg);
+        batch.fill(atlas, x - 3.0, y + h + 3.0, w + 6.0, 1.0, bg);
+        batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, h + 6.0, bg);
+        batch.fill(atlas, x - 4.0, y - 3.0, 1.0, h + 6.0, bg);
+        batch.fill(atlas, x + w + 3.0, y - 3.0, 1.0, h + 6.0, bg);
+        batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, top);
+        batch.fill(atlas, x - 3.0, y + h + 2.0, w + 6.0, 1.0, bottom);
+        batch.fill(atlas, x - 3.0, y - 2.0, 1.0, h + 4.0, top);
+        batch.fill(atlas, x + w + 2.0, y - 2.0, 1.0, h + 4.0, top);
+    }
     let mut ly = y;
     for (i, line) in lines.iter().enumerate() {
         batch.text_styled(atlas, line, x, ly, u32::MAX, true);

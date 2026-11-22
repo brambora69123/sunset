@@ -25,7 +25,7 @@
 
 use crate::hud::{HudAtlas, HudBatch, Rect, rgba};
 use crate::mesher::sunset17::blocks::{BlockDef, Kind};
-use crate::sunset17_assets::{self, Texture, sprite_name};
+use crate::sunset17_assets::{self, sprite_name};
 use std::sync::OnceLock;
 
 /// The pixels one item fills in a GUI slot (`ItemRenderer.drawTexture`'s 16x16).
@@ -39,55 +39,54 @@ const FLAT_Z: f32 = 7.5 / 16.0;
 const FACE_SHADE: [f32; 6] = [0.5, 1.0, 0.8, 0.8, 0.6, 0.6];
 
 /// One face of the unit cube, in `BlockRenderer`'s order (bottom, top, north,
-/// south, west, east): four corners and the sprite fraction each samples, `u`
-/// and `v` running 0..1 from the sprite's `uMin`/`vMin` (the atlas cell's left
-/// and top edge) to its `uMax`/`vMax`.
-const FACES: [[([f32; 3], [f32; 2]); 4]; 6] = [
-    // bottom
+/// south, west, east): four corners in CCW outward winding (`(p1-p0) x (p2-p0)`
+/// matches [`FACE_NORMAL`]).
+const FACE_CORNERS: [[[f32; 3]; 4]; 6] = [
+    // bottom (-Y)
     [
-        ([0.0, 0.0, 1.0], [0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [0.0, 1.0]),
-        ([1.0, 0.0, 0.0], [1.0, 1.0]),
-        ([1.0, 0.0, 1.0], [1.0, 0.0]),
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0],
     ],
-    // top
+    // top (+Y)
     [
-        ([1.0, 1.0, 1.0], [1.0, 0.0]),
-        ([1.0, 1.0, 0.0], [1.0, 1.0]),
-        ([0.0, 1.0, 0.0], [0.0, 1.0]),
-        ([0.0, 1.0, 1.0], [0.0, 0.0]),
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 1.0, 1.0],
     ],
-    // north
+    // north (-Z)
     [
-        ([0.0, 1.0, 0.0], [1.0, 1.0]),
-        ([1.0, 1.0, 0.0], [0.0, 1.0]),
-        ([1.0, 0.0, 0.0], [0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [1.0, 0.0]),
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
     ],
-    // south
+    // south (+Z)
     [
-        ([0.0, 1.0, 1.0], [0.0, 1.0]),
-        ([0.0, 0.0, 1.0], [1.0, 1.0]),
-        ([1.0, 0.0, 1.0], [1.0, 0.0]),
-        ([1.0, 1.0, 1.0], [0.0, 0.0]),
+        [0.0, 1.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
     ],
-    // west
+    // west (-X)
     [
-        ([0.0, 1.0, 1.0], [1.0, 1.0]),
-        ([0.0, 1.0, 0.0], [0.0, 1.0]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0]),
-        ([0.0, 0.0, 1.0], [1.0, 0.0]),
+        [0.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
     ],
-    // east
+    // east (+X)
     [
-        ([0.0, 0.0, 1.0], [0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [1.0, 0.0]),
-        ([0.0, 1.0, 0.0], [1.0, 1.0]),
-        ([0.0, 1.0, 1.0], [0.0, 1.0]),
+        [1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
     ],
 ];
 
-/// `Block.getRenderType`'s outward normal per face, in [`FACES`] order.
+/// `Block.getRenderType`'s outward normal per face, in [`FACE_CORNERS`] order.
 const FACE_NORMAL: [[f32; 3]; 6] = [
     [0.0, -1.0, 0.0],
     [0.0, 1.0, 0.0],
@@ -97,6 +96,8 @@ const FACE_NORMAL: [[f32; 3]; 6] = [
     [1.0, 0.0, 0.0],
 ];
 
+/// `ColorizerGrass.getGrassColor(0.5, 1.0)`: `BlockGrass.getBlockColor()` in 1.7.10.
+pub const GRASS_COLOR: u32 = 0x7C_BD_6B;
 /// `ColorizerFoliage.getDefaultColor()`: `AbstractLeavesBlock.getColor(metadata)`,
 /// the colour oak and jungle leaves draw in the icon (and both leaves of id 161).
 pub const DEFAULT_LEAVES_COLOR: u32 = 0x48_B5_18;
@@ -104,6 +105,22 @@ pub const DEFAULT_LEAVES_COLOR: u32 = 0x48_B5_18;
 pub const SPRUCE_LEAVES_COLOR: u32 = 0x61_99_61;
 /// `ColorizerFoliage.getBirchColor()` (`LeavesBlock.getColor` metadata 2).
 pub const BIRCH_LEAVES_COLOR: u32 = 0x80_A7_55;
+/// `BlockLilyPad.getBlockColor()` in 1.7.10.
+pub const WATERLILY_COLOR: u32 = 0x20_80_30;
+/// `ItemArmor` default brown leather colour in 1.7.10.
+pub const LEATHER_DEFAULT_COLOR: u32 = 0xA0_65_40;
+
+/// Upright sprite UV `[u, v]` (0..1, v=0 top of texture) for a point `p` inside `[0..1]^3`
+/// on `face` (matching `RenderBlocks.renderFace*` cropping for sub-cube shapes).
+fn face_uv(face: usize, p: [f32; 3]) -> [f32; 2] {
+    match face {
+        0 | 1 => [p[0], p[2]],
+        2 => [1.0 - p[0], 1.0 - p[1]],
+        3 => [p[0], 1.0 - p[1]],
+        4 => [p[2], 1.0 - p[1]],
+        _ => [1.0 - p[2], 1.0 - p[1]],
+    }
+}
 
 /// The item id the era registers under `name` (`minecraft:stick`), if any.
 pub fn item_id(name: &str) -> Option<u16> {
@@ -119,6 +136,198 @@ pub fn item_name(id: u16) -> Option<&'static str> {
         .find_map(|&(item_id, name)| (item_id == id).then_some(name))
 }
 
+/// Whether `id` renders as a 3D block shape (cube, slab, stairs, fence, ...) in 1.7.10.
+pub fn is_3d_block_item(id: u16) -> bool {
+    block_of(id).is_some_and(|block| !item_boxes(id, block).is_empty())
+}
+
+/// Whether `id` is held like a handheld tool/weapon/rod (`Item.isHandheld()` / `bFull3D`) in 1.7.10.
+pub fn is_handheld(id: u16) -> bool {
+    matches!(
+        id,
+        256..=258
+            | 267..=279
+            | 280
+            | 283..=286
+            | 290..=294
+            | 346
+            | 352
+            | 398
+    )
+}
+
+/// Whether `id` rotates 180° in hand (`Item.shouldRotate()`: fishing rod, carrot on a stick).
+pub fn should_rotate(id: u16) -> bool {
+    matches!(id, 346 | 398)
+}
+
+/// Whether `id` is the 1.7.10 bow item (`Items.BOW`, id 261).
+pub fn is_bow(id: u16) -> bool {
+    id == 261
+}
+
+/// First-person view-model transform from 1.7.10 `ItemInHandRenderer.renderHand` + `render`,
+/// operating directly on centered `[-0.5..0.5]^3` blocks and `[-0.5..0.5, -0.5..0.5, -0.03125..0.03125]`
+/// extruded item meshes.
+pub fn first_person_item_matrix(
+    id: u16,
+    left: bool,
+    inverse_height: f32,
+    attack: f32,
+    block: bool,
+    bow_ticks: Option<f32>,
+    eat: Option<(f32, f32)>,
+) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    let deg = |d: f32| d.to_radians();
+    let pi = std::f32::consts::PI;
+
+    let mut m = Mat4::IDENTITY;
+    if let Some((remaining, duration)) = eat {
+        let f = 1.0 - (remaining / duration.max(1.0)).clamp(0.0, 1.0);
+        let inv = 1.0 - f;
+        let inv9 = inv * inv * inv;
+        let inv9 = inv9 * inv9 * inv9;
+        let pull = 1.0 - inv9;
+        let bob = if f <= 0.2 {
+            0.0
+        } else {
+            ((remaining / 4.0 * pi).cos() * 0.1).abs()
+        };
+        m *= Mat4::from_translation(Vec3::new(0.0, bob, 0.0));
+        m *= Mat4::from_translation(Vec3::new(pull * 0.6, -pull * 0.5, 0.0));
+        m *= Mat4::from_rotation_y(deg(pull * 90.0));
+        m *= Mat4::from_rotation_x(deg(pull * 10.0));
+        m *= Mat4::from_rotation_z(deg(pull * 30.0));
+    } else {
+        let f = (attack * pi).sin();
+        let f1 = (attack.sqrt() * pi).sin();
+        let f2 = (attack.sqrt() * pi * 2.0).sin();
+        m *= Mat4::from_translation(Vec3::new(-0.4 * f1, 0.2 * f2, -0.2 * f));
+    }
+
+    // renderHand(partial): T(0.56, -0.52 - (1 - handHeight) * 0.6, -0.72), Ry(45), swing, S(0.4).
+    let swing = if eat.is_some() { 0.0 } else { attack };
+    let sf = (swing * swing * pi).sin();
+    let sf1 = (swing.sqrt() * pi).sin();
+    m *= Mat4::from_translation(Vec3::new(0.56, -0.52 - inverse_height * 0.6, -0.72));
+    m *= Mat4::from_rotation_y(deg(45.0));
+    m *= Mat4::from_rotation_y(deg(-20.0 * sf));
+    m *= Mat4::from_rotation_z(deg(-20.0 * sf1));
+    m *= Mat4::from_rotation_x(deg(-80.0 * sf1));
+    m *= Mat4::from_scale(Vec3::splat(0.4));
+
+    if block {
+        m *= Mat4::from_translation(Vec3::new(-0.5, 0.2, 0.0));
+        m *= Mat4::from_rotation_y(deg(30.0));
+        m *= Mat4::from_rotation_x(deg(-80.0));
+        m *= Mat4::from_rotation_y(deg(60.0));
+    } else if let Some(ticks_used) = bow_ticks {
+        m *= Mat4::from_rotation_z(deg(-18.0));
+        m *= Mat4::from_rotation_y(deg(-12.0));
+        m *= Mat4::from_rotation_x(deg(-8.0));
+        m *= Mat4::from_translation(Vec3::new(-0.9, 0.2, 0.0));
+        let f = (ticks_used / 20.0).min(1.0);
+        let power = ((f * f + f * 2.0) / 3.0).min(1.0);
+        if power > 0.1 {
+            m *= Mat4::from_translation(Vec3::new(
+                0.0,
+                ((ticks_used - 0.1) * 1.3).sin() * 0.01 * (power - 0.1),
+                0.0,
+            ));
+        }
+        m *= Mat4::from_translation(Vec3::new(0.0, 0.0, power * 0.1));
+        m *= Mat4::from_rotation_z(deg(-335.0));
+        m *= Mat4::from_rotation_y(deg(-50.0));
+        m *= Mat4::from_translation(Vec3::new(0.0, 0.5, 0.0));
+        m *= Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0 + power * 0.2));
+        m *= Mat4::from_translation(Vec3::new(0.0, -0.5, 0.0));
+        m *= Mat4::from_rotation_y(deg(50.0));
+        m *= Mat4::from_rotation_z(deg(335.0));
+    }
+
+    if should_rotate(id) {
+        m *= Mat4::from_rotation_y(deg(180.0));
+    }
+
+    if !is_3d_block_item(id) {
+        // ItemInHandRenderer.render: T(0, -0.3, 0) * S(1.5) * Ry(50) * Rz(335) * T(-0.9375, -0.0625, 0)
+        // followed by T(0.5, 0.5, -0.03125) to map centered [-0.5..0.5] to [0..1, 0..1, -0.0625..0].
+        m *= Mat4::from_translation(Vec3::new(0.0, -0.3, 0.0));
+        m *= Mat4::from_scale(Vec3::splat(1.5));
+        m *= Mat4::from_rotation_y(deg(50.0));
+        m *= Mat4::from_rotation_z(deg(335.0));
+        m *= Mat4::from_translation(Vec3::new(-0.9375, -0.0625, 0.0));
+        m *= Mat4::from_translation(Vec3::new(0.5, 0.5, -0.03125));
+    }
+
+    if left {
+        let mirror = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        mirror * m * mirror
+    } else {
+        m
+    }
+}
+
+/// Third-person held item transform relative to the arm bone (`PlayerRenderer.renderMore` lines
+/// 222-271 + `ItemInHandRenderer.render` lines 84-90).
+pub fn third_person_item_matrix(id: u16, left: bool, blocking: bool) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    let deg = |d: f32| d.to_radians();
+    let mut m = Mat4::from_translation(Vec3::new(-0.0625, 0.4375, 0.0625));
+
+    if is_3d_block_item(id) {
+        m *= Mat4::from_translation(Vec3::new(0.0, 0.1875, -0.3125));
+        m *= Mat4::from_rotation_x(deg(20.0));
+        m *= Mat4::from_rotation_y(deg(45.0));
+        m *= Mat4::from_scale(Vec3::new(-0.375, -0.375, 0.375));
+    } else {
+        if is_bow(id) {
+            m *= Mat4::from_translation(Vec3::new(0.0, 0.125, 0.3125));
+            m *= Mat4::from_rotation_y(deg(-20.0));
+            m *= Mat4::from_scale(Vec3::new(0.625, -0.625, 0.625));
+            m *= Mat4::from_rotation_x(deg(-100.0));
+            m *= Mat4::from_rotation_y(deg(45.0));
+        } else if is_handheld(id) {
+            if should_rotate(id) {
+                m *= Mat4::from_rotation_z(deg(180.0));
+                m *= Mat4::from_translation(Vec3::new(0.0, -0.125, 0.0));
+            }
+            if blocking {
+                m *= Mat4::from_translation(Vec3::new(0.05, 0.0, -0.1));
+                m *= Mat4::from_rotation_y(deg(-50.0));
+                m *= Mat4::from_rotation_x(deg(-10.0));
+                m *= Mat4::from_rotation_z(deg(-60.0));
+            }
+            m *= Mat4::from_translation(Vec3::new(0.0, 0.1875, 0.0));
+            m *= Mat4::from_scale(Vec3::new(0.625, -0.625, 0.625));
+            m *= Mat4::from_rotation_x(deg(-100.0));
+            m *= Mat4::from_rotation_y(deg(45.0));
+        } else {
+            m *= Mat4::from_translation(Vec3::new(0.25, 0.1875, -0.1875));
+            m *= Mat4::from_scale(Vec3::splat(0.375));
+            m *= Mat4::from_rotation_z(deg(60.0));
+            m *= Mat4::from_rotation_x(deg(-90.0));
+            m *= Mat4::from_rotation_z(deg(20.0));
+        }
+
+        // ItemInHandRenderer.render on flat items:
+        m *= Mat4::from_translation(Vec3::new(0.0, -0.3, 0.0));
+        m *= Mat4::from_scale(Vec3::splat(1.5));
+        m *= Mat4::from_rotation_y(deg(50.0));
+        m *= Mat4::from_rotation_z(deg(335.0));
+        m *= Mat4::from_translation(Vec3::new(-0.9375, -0.0625, 0.0));
+        m *= Mat4::from_translation(Vec3::new(0.5, 0.5, -0.03125));
+    }
+
+    if left {
+        let mirror = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        mirror * m * mirror
+    } else {
+        m
+    }
+}
+
 /// Draw `id`'s icon for `meta` at `(x, y)` in GUI pixels: `ItemRenderer.renderGuiItem`.
 /// `tick` picks the frame of an animated sprite (`items/compass`, `items/clock`).
 pub fn paint(
@@ -130,16 +339,14 @@ pub fn paint(
     y: f32,
     tick: u64,
 ) {
-    match block_of(id) {
-        Some(block) if drawn_as_block(block) => paint_block(batch, atlas, block, id, meta, x, y),
-        _ => {
-            let Some(texture) = sunset17_assets::item_texture(i32::from(id), i32::from(meta))
-            else {
-                return;
-            };
-            paint_flat(batch, atlas, &texture, x, y, tick);
+    if let Some(block) = block_of(id) {
+        let boxes = item_boxes(id, block);
+        if !boxes.is_empty() {
+            paint_block(batch, atlas, block, &boxes, id, meta, x, y);
+            return;
         }
     }
+    paint_flat_item(batch, atlas, id, meta, x, y, tick);
 }
 
 /// The era block of a block item id: `Block.getBlockFromItem`, `None` for an item
@@ -165,10 +372,70 @@ fn block_of(id: u16) -> Option<&'static BlockDef> {
     blocks.get(usize::from(id)).and_then(|block| block.as_ref())
 }
 
-/// Whether `renderAsItem` draws the block as a cube: `BlockRenderer.isItem3d`'s
-/// cube shapes, here the full-cube blocks. The era gives slabs, stairs, fences,
-/// snow layers, cacti and the crossed plants their own geometry; those keep the
-/// flat icon.
+/// The 3D boxes `[min_x, min_y, min_z, max_x, max_y, max_z]` that `RenderBlocks.renderBlockAsItem`
+/// draws for `id`, or empty when the item renders as a flat 2D sprite.
+fn item_boxes(id: u16, block: &BlockDef) -> smallvec::SmallVec<[[f32; 6]; 4]> {
+    use smallvec::smallvec;
+    match id {
+        // Single slabs.
+        44 | 126 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]],
+        // Snow layer (2/16 high in inventory).
+        78 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.125, 1.0]],
+        // Carpet (1/16 high).
+        171 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.0625, 1.0]],
+        // Cactus (1/16 inset horizontally).
+        81 => smallvec![[0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375]],
+        // Daylight detector (6/16 high).
+        151 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.375, 1.0]],
+        // Enchanting table (12/16 high).
+        116 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
+        // End portal frame (13/16 high).
+        120 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.8125, 1.0]],
+        // Farmland (15/16 high).
+        60 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.9375, 1.0]],
+        // Trapdoor (3/16 high).
+        96 => smallvec![[0.0, 0.0, 0.0, 1.0, 0.1875, 1.0]],
+        // Pressure plates.
+        70 | 72 | 147 | 148 => smallvec![[0.0625, 0.0, 0.0625, 0.9375, 0.0625, 0.9375]],
+        // Buttons.
+        77 | 143 => smallvec![[0.3125, 0.375, 0.375, 0.6875, 0.625, 0.625]],
+        // Fences (two posts and two rails).
+        85 | 113 => smallvec![
+            [0.375, 0.0, 0.0, 0.625, 1.0, 0.25],
+            [0.375, 0.0, 0.75, 0.625, 1.0, 1.0],
+            [0.4375, 0.375, 0.0, 0.5625, 0.5625, 1.0],
+            [0.4375, 0.75, 0.0, 0.5625, 0.9375, 1.0],
+        ],
+        // Fence gate.
+        107 => smallvec![
+            [0.0, 0.3125, 0.4375, 0.125, 1.0, 0.5625],
+            [0.875, 0.3125, 0.4375, 1.0, 1.0, 0.5625],
+            [0.125, 0.375, 0.4375, 0.875, 0.9375, 0.5625],
+        ],
+        // Cobblestone wall.
+        139 => smallvec![
+            [0.25, 0.0, 0.25, 0.75, 1.0, 0.75],
+            [0.3125, 0.0, 0.0, 0.6875, 0.8125, 1.0],
+        ],
+        // Anvil (base, stem, top).
+        145 => smallvec![
+            [0.125, 0.0, 0.125, 0.875, 0.25, 0.875],
+            [0.25, 0.25, 0.3125, 0.75, 0.625, 0.6875],
+            [0.0, 0.625, 0.1875, 1.0, 1.0, 0.8125],
+        ],
+        // Chests & pistons.
+        54 | 130 | 146 => smallvec![[0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]],
+        29 | 33 => smallvec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+        _ if block.kind == Kind::Stairs => smallvec![
+            [0.0, 0.0, 0.0, 1.0, 0.5, 1.0],
+            [0.0, 0.5, 0.0, 0.5, 1.0, 1.0],
+        ],
+        _ if drawn_as_block(block) => smallvec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+        _ => smallvec![],
+    }
+}
+
+/// Whether `renderAsItem` draws the block as a full cube.
 fn drawn_as_block(block: &BlockDef) -> bool {
     matches!(
         block.kind,
@@ -179,24 +446,150 @@ fn drawn_as_block(block: &BlockDef) -> bool {
             | Kind::Glass
             | Kind::Ice
             | Kind::Leaves
+            | Kind::Slab { double: true }
     ) && block.bounds.is_full_cube()
 }
 
-/// The flat path: one 16x16 quad of the item's sprite, the era's
-/// `ItemRenderer.drawTexture`.
-fn paint_flat(
+/// Flat-item sprite layers `(sprite_name, rgb_tint)` for a 2D item in 1.7.10.
+fn flat_layers(id: u16, meta: u16) -> smallvec::SmallVec<[(String, u32); 2]> {
+    use smallvec::smallvec;
+    // Potions: tinted liquid overlay under the bottle outline.
+    if id == 373 {
+        let bottle = if meta & 0x4000 != 0 {
+            "minecraft:items/potion_bottle_splash"
+        } else {
+            "minecraft:items/potion_bottle_drinkable"
+        };
+        return smallvec![
+            (
+                "minecraft:items/potion_overlay".to_owned(),
+                potion_color_17(meta)
+            ),
+            (bottle.to_owned(), 0xFF_FF_FF),
+        ];
+    }
+    // Spawn eggs: primary colour on base, secondary colour on spots overlay.
+    if id == 383 {
+        let (primary, secondary) = spawn_egg_colors_17(meta);
+        return smallvec![
+            ("minecraft:items/spawn_egg".to_owned(), primary),
+            ("minecraft:items/spawn_egg_overlay".to_owned(), secondary),
+        ];
+    }
+    // Leather armour: brown base + untinted overlay.
+    if let Some((base, overlay)) = match id {
+        298 => Some((
+            "minecraft:items/leather_helmet",
+            "minecraft:items/leather_helmet_overlay",
+        )),
+        299 => Some((
+            "minecraft:items/leather_chestplate",
+            "minecraft:items/leather_chestplate_overlay",
+        )),
+        300 => Some((
+            "minecraft:items/leather_leggings",
+            "minecraft:items/leather_leggings_overlay",
+        )),
+        301 => Some((
+            "minecraft:items/leather_boots",
+            "minecraft:items/leather_boots_overlay",
+        )),
+        _ => None,
+    } {
+        return smallvec![
+            (base.to_owned(), LEATHER_DEFAULT_COLOR),
+            (overlay.to_owned(), 0xFF_FF_FF),
+        ];
+    }
+    let Some(texture) = sunset17_assets::item_texture(i32::from(id), i32::from(meta)) else {
+        return smallvec![];
+    };
+    let tint = match id {
+        31 if matches!(meta, 1 | 2) => GRASS_COLOR,
+        175 if matches!(meta & 7, 2 | 3) => GRASS_COLOR,
+        106 => DEFAULT_LEAVES_COLOR,
+        111 => WATERLILY_COLOR,
+        _ => 0xFF_FF_FF,
+    };
+    smallvec![(sprite_name(&texture), tint)]
+}
+
+/// 1.7.10 `PotionHelper.calcPotionLiquidColor` for the standard creative/brewing damage bits.
+fn potion_color_17(meta: u16) -> u32 {
+    if meta == 0 {
+        return 0x38_5D_C6;
+    }
+    match meta & 0x0F {
+        1 => 0xCD_5C_AB,  // Regeneration
+        2 => 0x7C_AF_C6,  // Swiftness
+        3 => 0xE4_9A_3A,  // Fire Resistance
+        4 => 0x4E_93_31,  // Poison
+        5 => 0xF8_24_23,  // Healing
+        6 => 0x1F_1F_A1,  // Night Vision
+        8 => 0x48_4D_48,  // Weakness
+        9 => 0x93_24_23,  // Strength
+        10 => 0x5A_6C_81, // Slowness
+        12 => 0x43_0A_09, // Harming
+        13 => 0x2E_52_99, // Water Breathing
+        14 => 0x7F_83_92, // Invisibility
+        _ => 0x38_5D_C6,
+    }
+}
+
+/// 1.7.10 `EntityList` spawn egg `(primary, secondary)` colours by entity id.
+fn spawn_egg_colors_17(entity_id: u16) -> (u32, u32) {
+    match entity_id {
+        50 => (0x0D_A7_0B, 0x00_00_00),  // Creeper
+        51 => (0xC1_C1_C1, 0x49_49_49),  // Skeleton
+        52 => (0x34_2D_27, 0xA8_0E_0E),  // Spider
+        54 => (0x00_AF_AF, 0x79_9C_65),  // Zombie
+        55 => (0x51_A0_3E, 0x7E_BF_6E),  // Slime
+        56 => (0xF9_F9_F9, 0xBC_BC_BC),  // Ghast
+        57 => (0xEA_93_93, 0x4C_71_29),  // Zombie Pigman
+        58 => (0x16_1616, 0x00_00_00),   // Enderman
+        59 => (0x0C_42_4E, 0xA8_0E_0E),  // Cave Spider
+        60 => (0x6E_6E_6E, 0x30_30_30),  // Silverfish
+        61 => (0xF6_B2_01, 0xFF_F8_7E),  // Blaze
+        62 => (0x34_00_00, 0xFC_FC_00),  // Magma Cube
+        65 => (0x4C_3E_30, 0x0F_0F_0F),  // Bat
+        66 => (0x34_00_00, 0x51_A0_3E),  // Witch
+        90 => (0xF0_A5_A2, 0xDB_63_5F),  // Pig
+        91 => (0xE7_E7_E7, 0xFF_B5_B5),  // Sheep
+        92 => (0x44_36_26, 0xA1_A1_A1),  // Cow
+        93 => (0xA1_A1_A1, 0xFF_00_00),  // Chicken
+        94 => (0x22_3B_4D, 0x70_88_99),  // Squid
+        95 => (0xD7_D3_D3, 0xCE_AF_96),  // Wolf
+        96 => (0xA0_0F_10, 0xB7_B7_B7),  // Mooshroom
+        98 => (0xEF_DE_7D, 0x56_44_34),  // Ocelot
+        100 => (0xC0_9E_7D, 0xEE_E5_00), // Horse
+        120 => (0x56_3C_33, 0xBD_8B_72), // Villager
+        _ => (0xFF_FF_FF, 0xA0_A0_A0),
+    }
+}
+
+/// The flat path: one or two tinted 16x16 quads at `(x, y)` (`ItemRenderer.drawTexture`).
+fn paint_flat_item(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
-    texture: &Texture,
+    id: u16,
+    meta: u16,
     x: f32,
     y: f32,
     tick: u64,
 ) {
-    let Some(rect) = atlas.gui_rect(&sprite_name(texture)).copied() else {
-        return;
-    };
-    let rect = frame_rect(rect, tick);
-    batch.rect_uv(x, y, ICON_SIZE as f32, ICON_SIZE as f32, rect, u32::MAX);
+    for (name, tint) in flat_layers(id, meta) {
+        let Some(rect) = atlas.gui_rect(&name).copied() else {
+            continue;
+        };
+        let rect = frame_rect(rect, tick);
+        let color = rgba(
+            (tint >> 16 & 0xFF) as u8,
+            (tint >> 8 & 0xFF) as u8,
+            (tint & 0xFF) as u8,
+            0xFF,
+        );
+        batch.rect_uv(x, y, ICON_SIZE as f32, ICON_SIZE as f32, rect, color);
+    }
 }
 
 /// `TextureAtlasSprite`'s animation: the file is a vertical strip of
@@ -217,37 +610,64 @@ fn frame_rect(rect: Rect, tick: u64) -> Rect {
     }
 }
 
-/// The block path: the visible faces of the era's GUI cube, shaded and tinted
-/// (`BlockRenderer.renderAsItem`'s cube branch).
+/// The block path: the visible faces of the era's GUI block boxes, shaded,
+/// cropped to each box's bounds and sorted back-to-front.
+#[allow(clippy::too_many_arguments)]
 fn paint_block(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     block: &BlockDef,
+    boxes: &[[f32; 6]],
     id: u16,
     meta: u16,
     x: f32,
     y: f32,
 ) {
     let block_meta = block_metadata(id, meta);
-    let tint = cube_tint(block, id, block_meta);
     let matrix = gui_block_matrix(x, y);
-    // Only the faces turned toward the viewer draw: the era leaves back-face
-    // culling on for this pass. Painter's order between them, farthest first.
-    let mut faces: Vec<(f32, [([f32; 3], [f32; 2]); 4], usize)> = Vec::with_capacity(3);
-    for (face, corners) in FACES.into_iter().enumerate() {
-        let normal = transform_normal(&matrix, FACE_NORMAL[face]);
-        if normal[2] <= 0.0 {
-            continue;
+    let mut draws: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], usize)> =
+        Vec::with_capacity(boxes.len() * 3);
+    for &[x0, y0, z0, x1, y1, z1] in boxes {
+        for (face, unit_corners) in FACE_CORNERS.into_iter().enumerate() {
+            let normal = transform_normal(&matrix, FACE_NORMAL[face]);
+            if normal[2] <= 0.0 {
+                continue;
+            }
+            let mut depth = 0.0;
+            let mut positions = [[0.0; 2]; 4];
+            let mut uvs = [[0.0; 2]; 4];
+            for (i, corner) in unit_corners.into_iter().enumerate() {
+                let p = [
+                    x0 + (x1 - x0) * corner[0],
+                    y0 + (y1 - y0) * corner[1],
+                    z0 + (z1 - z0) * corner[2],
+                ];
+                let q = transform_point(&matrix, p);
+                depth += q[2];
+                positions[i] = [q[0], q[1]];
+                uvs[i] = face_uv(face, p);
+            }
+            draws.push((depth / 4.0, positions, uvs, face));
         }
-        let depth = corners
-            .iter()
-            .map(|&(corner, _)| transform_point(&matrix, corner)[2])
-            .sum::<f32>()
-            / 4.0;
-        faces.push((depth, corners, face));
     }
-    faces.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_, corners, face) in faces {
+    draws.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let shade_color = |tint: u32, shade: f32| {
+        rgba(
+            (f32::from((tint >> 16 & 0xFF) as u8) * shade) as u8,
+            (f32::from((tint >> 8 & 0xFF) as u8) * shade) as u8,
+            (f32::from((tint & 0xFF) as u8) * shade) as u8,
+            0xFF,
+        )
+    };
+    let map_uvs = |rect: Rect, frac: [[f32; 2]; 4]| {
+        frac.map(|uv| {
+            [
+                rect.u0 + (rect.u1 - rect.u0) * uv[0],
+                rect.v0 + (rect.v1 - rect.v0) * uv[1],
+            ]
+        })
+    };
+    for (_, positions, frac_uvs, face) in draws {
         let Some(texture) = sunset17_assets::block_texture(id, block_meta, face as u8) else {
             continue;
         };
@@ -255,32 +675,285 @@ fn paint_block(
             continue;
         };
         let shade = FACE_SHADE[face];
-        let color = rgba(
-            (f32::from((tint >> 16 & 0xFF) as u8) * shade) as u8,
-            (f32::from((tint >> 8 & 0xFF) as u8) * shade) as u8,
-            (f32::from((tint & 0xFF) as u8) * shade) as u8,
-            0xFF,
-        );
-        let mut positions = [[0.0; 2]; 4];
-        let mut uvs = [[0.0; 2]; 4];
-        for (i, &(corner, uv)) in corners.iter().enumerate() {
-            let p = transform_point(&matrix, corner);
-            positions[i] = [p[0], p[1]];
-            uvs[i] = [
-                rect.u0 + (rect.u1 - rect.u0) * uv[0],
-                rect.v0 + (rect.v1 - rect.v0) * uv[1],
-            ];
+        let tint = face_tint(block, id, block_meta, face);
+        batch.quad(positions, map_uvs(rect, frac_uvs), shade_color(tint, shade));
+        // 1.7.10 fancy grass block: tint `grass_side_overlay` over the untinted side.
+        if block.kind == Kind::Grass
+            && (2..=5).contains(&face)
+            && let Some(overlay) = atlas
+                .gui_rect("minecraft:blocks/grass_side_overlay")
+                .copied()
+        {
+            batch.quad(
+                positions,
+                map_uvs(overlay, frac_uvs),
+                shade_color(GRASS_COLOR, shade),
+            );
         }
-        batch.quad(positions, uvs, color);
     }
 }
 
-/// `Block.getColor(metadata)`, the tint the cube is drawn with. `renderAsItem`
-/// draws grass white; the leaves answer with the era's foliage colours, and
-/// every other block keeps its texture.
+/// Emit 3D world-space quad vertices (4 per quad) for a 1.7.10 item (first-person hand,
+/// dropped item entity, or third-person mob/player held item) under `pose`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_world_item(
+    atlas: &HudAtlas,
+    id: u16,
+    meta: u16,
+    pose: glam::Mat4,
+    light: u32,
+    lit: bool,
+    tick: u64,
+    out: &mut Vec<crate::mesher::Vertex>,
+) -> bool {
+    if let Some(block) = block_of(id) {
+        let boxes = item_boxes(id, block);
+        if !boxes.is_empty() {
+            return emit_world_block(atlas, block, &boxes, id, meta, pose, light, lit, out);
+        }
+    }
+    emit_world_flat(atlas, id, meta, pose, light, lit, tick, out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_world_block(
+    atlas: &HudAtlas,
+    block: &BlockDef,
+    boxes: &[[f32; 6]],
+    id: u16,
+    meta: u16,
+    pose: glam::Mat4,
+    light: u32,
+    lit: bool,
+    out: &mut Vec<crate::mesher::Vertex>,
+) -> bool {
+    let block_meta = block_metadata(id, meta);
+    let before = out.len();
+    let normal_w = if lit { -127 } else { 0 };
+    let mut push_face = |pts: [[f32; 3]; 4],
+                         frac_uvs: [[f32; 2]; 4],
+                         rect: Rect,
+                         n: glam::Vec3,
+                         tint: u32,
+                         shade: f32| {
+        let s = if lit { 1.0 } else { shade };
+        let color = rgba(
+            (f32::from((tint >> 16 & 0xFF) as u8) * s) as u8,
+            (f32::from((tint >> 8 & 0xFF) as u8) * s) as u8,
+            (f32::from((tint & 0xFF) as u8) * s) as u8,
+            0xFF,
+        );
+        let packed_n = [
+            (n.x * 127.0).round() as i8,
+            (n.y * 127.0).round() as i8,
+            (n.z * 127.0).round() as i8,
+            normal_w,
+        ];
+        for (p, uv) in pts.into_iter().zip(frac_uvs) {
+            out.push(crate::mesher::Vertex {
+                pos: p,
+                uv: [
+                    rect.u0 + (rect.u1 - rect.u0) * uv[0],
+                    rect.v0 + (rect.v1 - rect.v0) * uv[1],
+                ],
+                layer: 0,
+                color,
+                light,
+                normal: packed_n,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    };
+    for &[x0, y0, z0, x1, y1, z1] in boxes {
+        for (face, unit_corners) in FACE_CORNERS.into_iter().enumerate() {
+            let Some(texture) = sunset17_assets::block_texture(id, block_meta, face as u8) else {
+                continue;
+            };
+            let Some(rect) = atlas.gui_rect(&sprite_name(&texture)).copied() else {
+                continue;
+            };
+            let n = pose
+                .transform_vector3(glam::Vec3::from(FACE_NORMAL[face]))
+                .normalize_or_zero();
+            let mut pts = [[0.0; 3]; 4];
+            let mut frac_uvs = [[0.0; 2]; 4];
+            for (i, corner) in unit_corners.into_iter().enumerate() {
+                let local = [
+                    x0 + (x1 - x0) * corner[0],
+                    y0 + (y1 - y0) * corner[1],
+                    z0 + (z1 - z0) * corner[2],
+                ];
+                let centered = glam::Vec3::new(local[0] - 0.5, local[1] - 0.5, local[2] - 0.5);
+                pts[i] = pose.transform_point3(centered).to_array();
+                frac_uvs[i] = face_uv(face, local);
+            }
+            let tint = face_tint(block, id, block_meta, face);
+            push_face(pts, frac_uvs, rect, n, tint, FACE_SHADE[face]);
+            if block.kind == Kind::Grass
+                && (2..=5).contains(&face)
+                && let Some(overlay) = atlas
+                    .gui_rect("minecraft:blocks/grass_side_overlay")
+                    .copied()
+            {
+                let lifted = pts.map(|p| [p[0] + n.x * 1e-3, p[1] + n.y * 1e-3, p[2] + n.z * 1e-3]);
+                push_face(lifted, frac_uvs, overlay, n, GRASS_COLOR, FACE_SHADE[face]);
+            }
+        }
+    }
+    out.len() > before
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_world_flat(
+    atlas: &HudAtlas,
+    id: u16,
+    meta: u16,
+    pose: glam::Mat4,
+    light: u32,
+    lit: bool,
+    tick: u64,
+    out: &mut Vec<crate::mesher::Vertex>,
+) -> bool {
+    let before = out.len();
+    let normal_w = if lit { -127 } else { 0 };
+    let pack = |local_n: glam::Vec3| {
+        let n = pose.transform_vector3(local_n).normalize_or_zero();
+        [
+            (n.x * 127.0).round() as i8,
+            (n.y * 127.0).round() as i8,
+            (n.z * 127.0).round() as i8,
+            normal_w,
+        ]
+    };
+    let n_front = pack(glam::Vec3::Z);
+    let n_back = pack(glam::Vec3::NEG_Z);
+    let n_left = pack(glam::Vec3::NEG_X);
+    let n_right = pack(glam::Vec3::X);
+    let n_top = pack(glam::Vec3::Y);
+    let n_bottom = pack(glam::Vec3::NEG_Y);
+
+    let mut push_quad = |corners: [([f32; 3], [f32; 2]); 4], color: u32, normal: [i8; 4]| {
+        for (p, uv) in corners {
+            out.push(crate::mesher::Vertex {
+                pos: pose.transform_point3(glam::Vec3::from(p)).to_array(),
+                uv,
+                layer: 0,
+                color,
+                light,
+                normal,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    };
+
+    for (layer_idx, (name, tint)) in flat_layers(id, meta).into_iter().enumerate() {
+        let Some(rect) = atlas.gui_rect(&name).copied() else {
+            continue;
+        };
+        let rect = frame_rect(rect, tick);
+        let color = rgba(
+            (tint >> 16 & 0xFF) as u8,
+            (tint >> 8 & 0xFF) as u8,
+            (tint & 0xFF) as u8,
+            0xFF,
+        );
+        let z_pad = layer_idx as f32 * 0.001;
+        let z1 = 0.03125 + z_pad;
+        let z0 = -0.03125 - z_pad;
+        // Match 1.7.10 `ItemInHandRenderer.draw`: centered in [-0.5..0.5]^2, thickness 1/16,
+        // with pixel-slice edge quads whose transparent texels are alpha-discarded in entity.wgsl.
+        push_quad(
+            [
+                ([-0.5, -0.5, z1], [rect.u1, rect.v1]),
+                ([0.5, -0.5, z1], [rect.u0, rect.v1]),
+                ([0.5, 0.5, z1], [rect.u0, rect.v0]),
+                ([-0.5, 0.5, z1], [rect.u1, rect.v0]),
+            ],
+            color,
+            n_front,
+        );
+        push_quad(
+            [
+                ([-0.5, 0.5, z0], [rect.u1, rect.v0]),
+                ([0.5, 0.5, z0], [rect.u0, rect.v0]),
+                ([0.5, -0.5, z0], [rect.u0, rect.v1]),
+                ([-0.5, -0.5, z0], [rect.u1, rect.v1]),
+            ],
+            color,
+            n_back,
+        );
+        let w = rect.w.clamp(1, 64);
+        let h = rect.h.clamp(1, 64);
+        let du = rect.u1 - rect.u0;
+        let dv = rect.v1 - rect.v0;
+        for k in 0..w {
+            let u = rect.u1 - du * ((k as f32 + 0.5) / w as f32);
+            let x_l = k as f32 / w as f32 - 0.5;
+            push_quad(
+                [
+                    ([x_l, -0.5, z0], [u, rect.v1]),
+                    ([x_l, -0.5, z1], [u, rect.v1]),
+                    ([x_l, 0.5, z1], [u, rect.v0]),
+                    ([x_l, 0.5, z0], [u, rect.v0]),
+                ],
+                color,
+                n_left,
+            );
+            let x_r = (k + 1) as f32 / w as f32 - 0.5;
+            push_quad(
+                [
+                    ([x_r, 0.5, z0], [u, rect.v0]),
+                    ([x_r, 0.5, z1], [u, rect.v0]),
+                    ([x_r, -0.5, z1], [u, rect.v1]),
+                    ([x_r, -0.5, z0], [u, rect.v1]),
+                ],
+                color,
+                n_right,
+            );
+        }
+        for k in 0..h {
+            let v = rect.v1 - dv * ((k as f32 + 0.5) / h as f32);
+            let y_t = (k + 1) as f32 / h as f32 - 0.5;
+            push_quad(
+                [
+                    ([-0.5, y_t, z1], [rect.u1, v]),
+                    ([0.5, y_t, z1], [rect.u0, v]),
+                    ([0.5, y_t, z0], [rect.u0, v]),
+                    ([-0.5, y_t, z0], [rect.u1, v]),
+                ],
+                color,
+                n_top,
+            );
+            let y_b = k as f32 / h as f32 - 0.5;
+            push_quad(
+                [
+                    ([0.5, y_b, z1], [rect.u0, v]),
+                    ([-0.5, y_b, z1], [rect.u1, v]),
+                    ([-0.5, y_b, z0], [rect.u1, v]),
+                    ([0.5, y_b, z0], [rect.u0, v]),
+                ],
+                color,
+                n_bottom,
+            );
+        }
+    }
+    out.len() > before
+}
+
+/// Per-face tint for a 3D block item: grass tints its top face (`grass_top`),
+/// leaves tint all faces with the era's foliage colours, everything else stays white.
+fn face_tint(block: &BlockDef, id: u16, meta: u8, face: usize) -> u32 {
+    match block.kind {
+        Kind::Grass if face == 1 => GRASS_COLOR,
+        Kind::Leaves => cube_tint(block, id, meta),
+        _ => 0xFF_FF_FF,
+    }
+}
+
+/// `Block.getColor(metadata)`, the block's default tint colour.
 fn cube_tint(block: &BlockDef, id: u16, meta: u8) -> u32 {
     match block.kind {
-        Kind::Grass => 0xFF_FF_FF,
+        Kind::Grass => GRASS_COLOR,
         Kind::Leaves if id == 18 => match meta & 3 {
             1 => SPRUCE_LEAVES_COLOR,
             2 => BIRCH_LEAVES_COLOR,
@@ -292,12 +965,11 @@ fn cube_tint(block: &BlockDef, id: u16, meta: u8) -> u32 {
 }
 
 /// `renderAsItem`'s block metadata: the dispenser, dropper and furnace draw
-/// their metadata-3 orientation; a `ColoredBlockItem` stores the dye value,
-/// whose block metadata is `~item & 15`.
+/// their metadata-3 (south-facing) orientation; `ItemCloth` passes item damage
+/// straight through (`0 = white .. 15 = black`).
 fn block_metadata(id: u16, meta: u16) -> u8 {
     match id {
-        35 | 95 | 159 | 160 | 171 => (!(meta as u8)) & 15,
-        23 | 61 | 158 => 3,
+        23 | 61 | 62 | 158 => 3,
         _ => meta as u8 & 15,
     }
 }

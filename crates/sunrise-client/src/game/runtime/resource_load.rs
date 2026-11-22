@@ -811,24 +811,32 @@ pub(super) fn load_resources_for_mods(
         // An integrated server shares the client's loaded resources and
         // language; it doesn't run this loader in production.
         lang::set(if era {
+            // Layer Sunrise's bundled UI strings + modern-only UI fallbacks underneath
+            // 1.7.10's `en_US.lang` so the era's own strings always win.
+            let mut language = Language::load(&[], &settings.language);
+            language.extend_missing(
+                sunrise_client::sunset17_assets::modern_ui_fallbacks()
+                    .iter()
+                    .map(|&(k, v)| (k.to_owned(), v.to_owned())),
+            );
             match sunrise_client::sunset17_assets::Assets::load(&root)
                 .and_then(|era| era.language())
             {
-                Ok(language) => {
+                Ok(era_lang) => {
                     log::info!(
                         "Sunrise: 1.7.10's en_US.lang loaded ({} keys)",
-                        language.len()
+                        era_lang.len()
                     );
-                    language
+                    language.extend(era_lang.iter().map(|(k, v)| (k.to_owned(), v.to_owned())));
                 }
                 Err(error) => {
                     log::warn!(
                         "Sunrise: 1.7.10's en_US.lang was not loaded ({error}); \
                          using the built-in English strings"
                     );
-                    Language::load(&[], &settings.language)
                 }
             }
+            language
         } else if role.is_dedicated_server() {
             Language::load_default(&vanilla_root.to_path_buf())
         } else {

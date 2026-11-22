@@ -430,55 +430,61 @@ impl Game<'_> {
                 tooltip = Some(Text::translate("menu.custom_options.tooltip", &[]));
             }
         }
-        for (i, &(x, y, sprite)) in layout.icons.iter().enumerate() {
-            let active = icon_active(i, friends);
-            let is_focused = (self.pause_focus == Some(10) && i == FRIENDS_ICON)
-                || (self.pause_focus == Some(12 + i as u8));
-            let hover = active && (ui::hovered(self.cursor, x, y, 20.0, 20.0) || is_focused);
-            // The icon has no label: name it for controller focus and the
-            // control socket's widget tree.
-            if i == FRIENDS_ICON {
-                sunrise_client::widgets::record(super::friends::TITLE, [x, y, 20.0, 20.0], active);
-            }
-            ui::button(
-                batch,
-                atlas,
-                x,
-                y,
-                20.0,
-                20.0,
-                &Text::empty(),
-                active,
-                hover,
-            );
-            // PauseScreen adds the icon row after Statistics: the icons'
-            // messages (their tooltips too), the friends button's own.
-            widgets::last_narratable_at(3 + i, |n| {
-                let t = |key: &str| Text::translate(key, &[]).plain();
-                let key = [
-                    "menu.reportBugs",
-                    "menu.sendFeedback",
-                    "",
-                    "menu.playerReporting",
-                ][i];
-                *n = if i == FRIENDS_ICON {
-                    widgets::Narratable::named(t("gui.friends.open.narration"), n.rect, active)
-                        .hint(t("gui.friends.open.tooltip"))
-                } else {
-                    widgets::Narratable::button(t(key), n.rect, active).hint(t(key))
+        if !self.era_ui() {
+            for (i, &(x, y, sprite)) in layout.icons.iter().enumerate() {
+                let active = icon_active(i, friends);
+                let is_focused = (self.pause_focus == Some(10) && i == FRIENDS_ICON)
+                    || (self.pause_focus == Some(12 + i as u8));
+                let hover = active && (ui::hovered(self.cursor, x, y, 20.0, 20.0) || is_focused);
+                // The icon has no label: name it for controller focus and the
+                // control socket's widget tree.
+                if i == FRIENDS_ICON {
+                    sunrise_client::widgets::record(
+                        super::friends::TITLE,
+                        [x, y, 20.0, 20.0],
+                        active,
+                    );
                 }
-                .hovered(hover);
-            });
-            // SpriteIconButton.CenteredIcon: the 15x15 sprite at
-            // x + width / 2 - 15 / 2 in integer pixels, untinted even
-            // when the button is inactive.
-            batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
-            if hover {
-                tooltip = Some(if i == FRIENDS_ICON {
-                    Text::literal(super::friends::title())
-                } else {
-                    Text::translate(ICON_LABELS[i], &[])
+                ui::button(
+                    batch,
+                    atlas,
+                    x,
+                    y,
+                    20.0,
+                    20.0,
+                    &Text::empty(),
+                    active,
+                    hover,
+                );
+                // PauseScreen adds the icon row after Statistics: the icons'
+                // messages (their tooltips too), the friends button's own.
+                widgets::last_narratable_at(3 + i, |n| {
+                    let t = |key: &str| Text::translate(key, &[]).plain();
+                    let key = [
+                        "menu.reportBugs",
+                        "menu.sendFeedback",
+                        "",
+                        "menu.playerReporting",
+                    ][i];
+                    *n = if i == FRIENDS_ICON {
+                        widgets::Narratable::named(t("gui.friends.open.narration"), n.rect, active)
+                            .hint(t("gui.friends.open.tooltip"))
+                    } else {
+                        widgets::Narratable::button(t(key), n.rect, active).hint(t(key))
+                    }
+                    .hovered(hover);
                 });
+                // SpriteIconButton.CenteredIcon: the 15x15 sprite at
+                // x + width / 2 - 15 / 2 in integer pixels, untinted even
+                // when the button is inactive.
+                batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
+                if hover {
+                    tooltip = Some(if i == FRIENDS_ICON {
+                        Text::literal(super::friends::title())
+                    } else {
+                        Text::translate(ICON_LABELS[i], &[])
+                    });
+                }
             }
         }
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Foreground);
@@ -570,14 +576,17 @@ impl Game<'_> {
             .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
             .map(|b| b.4)
             .or_else(|| {
-                // The report bugs, feedback and player reporting icons (ids 12, 13 and 15).
-                [0, 1, 3]
-                    .into_iter()
-                    .find(|&i| ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0))
-                    .map(|i| 12 + i as u8)
+                (!self.era_ui()).then(|| {
+                    // The report bugs, feedback and player reporting icons (ids 12, 13 and 15).
+                    [0, 1, 3]
+                        .into_iter()
+                        .find(|&i| ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0))
+                        .map(|i| 12 + i as u8)
+                })?
             })
             .or_else(|| {
-                (self.friends_shown()
+                (!self.era_ui()
+                    && self.friends_shown()
                     && ui::hovered(
                         self.cursor,
                         icons[FRIENDS_ICON].0,
@@ -622,7 +631,10 @@ impl Game<'_> {
             .map(|b| b.4)
             .collect();
         let friends = self.friends_shown();
-        active_ids.extend(pause_icon_focus_ids(friends));
+        let era_ui = self.era_ui();
+        if !era_ui {
+            active_ids.extend(pause_icon_focus_ids(friends));
+        }
         if active_ids.is_empty() {
             return Ok(());
         }
@@ -667,10 +679,12 @@ impl Game<'_> {
                     .map(|b| (b.4, b.0, b.1, b.2))
                     .collect();
                 let friends = self.friends_shown();
-                for (i, &(x, y, _)) in icons.iter().enumerate() {
-                    if icon_active(i, friends) {
-                        let id = if i == FRIENDS_ICON { 10 } else { 12 + i as u8 };
-                        rects.push((id, x, y, 20.0));
+                if !era_ui {
+                    for (i, &(x, y, _)) in icons.iter().enumerate() {
+                        if icon_active(i, friends) {
+                            let id = if i == FRIENDS_ICON { 10 } else { 12 + i as u8 };
+                            rects.push((id, x, y, 20.0));
+                        }
                     }
                 }
                 let cur_id = self.pause_focus.unwrap_or(0);

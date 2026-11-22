@@ -950,6 +950,48 @@ impl Game<'_> {
                 item.id as i32,
             );
             if state.is_empty() {
+                if self.era_ui()
+                    && let Some(id) = sunrise_client::items_1_7_10::item_id(&item.stack.item)
+                {
+                    let age = item.age as f32 + partial;
+                    let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
+                    let spin = age / 20.0 + item.bob_offset;
+                    let is_block = sunrise_client::items_1_7_10::is_3d_block_item(id);
+                    let scale = if is_block { 0.25 } else { 0.5 };
+                    let y_off = if is_block { 0.125 } else { 0.25 };
+                    let pose = glam::Mat4::from_translation(pos.as_vec3())
+                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, bob + y_off, 0.0))
+                        * glam::Mat4::from_rotation_y(spin)
+                        * glam::Mat4::from_scale(glam::Vec3::splat(scale));
+                    let packed = if entity {
+                        let probe = [
+                            at[0],
+                            at[1] + sunrise_client::entities::ItemEntity::EYE_HEIGHT,
+                            at[2],
+                        ];
+                        item.render_light(self.world.light(
+                            probe[0].floor() as i32,
+                            probe[1].floor() as i32,
+                            probe[2].floor() as i32,
+                        ))
+                    } else {
+                        vertex_light(self.world.light(
+                            q.x.floor() as i32,
+                            (q.y + 0.1).floor() as i32,
+                            q.z.floor() as i32,
+                        ))
+                    };
+                    sunrise_client::items_1_7_10::emit_world_item(
+                        &self.gui.atlas,
+                        id,
+                        item.stack.damage as u16,
+                        pose,
+                        packed,
+                        true,
+                        self.gui_ticks.max(0) as u64,
+                        out,
+                    );
+                }
                 continue;
             }
             let age = item.age as f32 + partial;

@@ -393,7 +393,8 @@ const BLOCKS_WITHOUT_ITEM: [i32; 27] = [
     132, 140, 144, 149, 150,
 ];
 
-/// The `ColoredBlockItem` blocks: item metadata inverted to block metadata.
+/// The `ColoredBlockItem` blocks (`ItemCloth`): item metadata passes through
+/// directly to block metadata (`0 = white .. 15 = black`).
 const COLORED_ITEM_BLOCKS: [i32; 5] = [35, 95, 159, 160, 171];
 
 /// The `VariantBlockItem` blocks (`spriteProvider` is the block itself, the north face).
@@ -420,15 +421,13 @@ fn block_item_texture(id: i32, metadata: i32) -> Option<Texture> {
         return Texture::from_sprite(Atlas::Items, "hopper");
     }
     let metadata = (metadata & 15) as u8;
-    let sprite = if COLORED_ITEM_BLOCKS.contains(&id) {
-        block_sprite(block.id as u16, !metadata & 15, FACE_NORTH)?
-    } else if VARIANT_ITEM_BLOCKS.contains(&id) || id == 145 {
+    let sprite = if COLORED_ITEM_BLOCKS.contains(&id)
+        || VARIANT_ITEM_BLOCKS.contains(&id)
+        || SLAB_ITEM_BLOCKS.contains(&id)
+        || id == 145
+    {
         block_sprite(block.id as u16, metadata, FACE_NORTH)?
-    } else if LEAVES_ITEM_BLOCKS.contains(&id) {
-        block_sprite(block.id as u16, metadata, FACE_BOTTOM)?
-    } else if SLAB_ITEM_BLOCKS.contains(&id) {
-        block_sprite(block.id as u16, metadata, FACE_NORTH)?
-    } else if PLANT_ITEM_BLOCKS.contains(&id) {
+    } else if LEAVES_ITEM_BLOCKS.contains(&id) || PLANT_ITEM_BLOCKS.contains(&id) {
         block_sprite(block.id as u16, metadata, FACE_BOTTOM)?
     } else if id == 175 {
         // BushItem.getSprite: the sunflower's front, the other variants' top.
@@ -1881,10 +1880,10 @@ mod tests {
         );
         assert_eq!(item_path(397, 3), format!("{items}/skull_steve.png"));
 
-        assert_eq!(item_path(35, 0), format!("{blocks}/wool_colored_black.png"));
+        assert_eq!(item_path(35, 0), format!("{blocks}/wool_colored_white.png"));
         assert_eq!(
             item_path(35, 15),
-            format!("{blocks}/wool_colored_white.png")
+            format!("{blocks}/wool_colored_black.png")
         );
         assert_eq!(item_path(5, 2), format!("{blocks}/planks_birch.png"));
         assert_eq!(item_path(58, 0), format!("{blocks}/crafting_table_top.png"));

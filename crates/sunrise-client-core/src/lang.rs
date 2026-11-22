@@ -554,6 +554,23 @@ impl Language {
         }
     }
 
+    /// Iterate over all `(key, template)` entries in this language.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.map.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Overlay `entries` onto this language (incoming values replace existing ones).
+    pub fn extend(&mut self, entries: impl IntoIterator<Item = (String, String)>) {
+        self.map.extend(entries);
+    }
+
+    /// Insert fallback `entries` for keys this language does not already define.
+    pub fn extend_missing(&mut self, entries: impl IntoIterator<Item = (String, String)>) {
+        for (key, value) in entries {
+            self.map.entry(key).or_insert(value);
+        }
+    }
+
     /// `Language.loadDefault`: built-in English from the unlayered vanilla root
     /// and the platform's bundles, with vanilla's deprecated keys applied.
     pub fn load_default(source: &dyn ResourceSource) -> Self {

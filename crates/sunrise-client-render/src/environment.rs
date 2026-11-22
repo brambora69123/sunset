@@ -1460,7 +1460,7 @@ mod tests {
         assert_eq!(noon.fog_color[0], 0.752_941_2);
         assert_eq!(noon.sun_angle, 0.0);
         assert_eq!(noon.moon_angle, 180.0);
-        assert_eq!(noon.cloud_height, 128.0);
+        assert_eq!(noon.cloud_height, 128.33);
         assert_eq!(noon.cloud_color[3], 0.8);
         let midnight = environment.sample(&Sample {
             day_time: 18000,

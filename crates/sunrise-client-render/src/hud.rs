@@ -75,6 +75,9 @@ pub struct HudAtlas {
     /// Identity of this packed atlas, used to invalidate cached model UV data
     /// even when a resource reload places sprites at the same coordinates.
     pub revision: u64,
+    /// The 1.7.10 atlas: its screens draw the era's own chrome
+    /// (`ui::tooltip_box`'s box, `hud_1_7_10`) instead of 26.3's sprites.
+    pub era: bool,
     /// RGBA8, `width` by `height`, as built: empty once `pack_pixels` has
     /// compressed them (read them through `pixels()`).
     pub pixels: Vec<u8>,
@@ -1301,8 +1304,6 @@ impl HudAtlas {
         if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             return Self::build_1_7_10(root, defaults);
         }
-        // A reload back to a 26.3 root drops the era's cloud texture.
-        crate::clouds::set_era_texture(None);
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
@@ -1329,6 +1330,7 @@ impl HudAtlas {
             false,
         )?;
         crate::sunset17_assets::alias_entity_textures(&mut atlas.sprites);
+        crate::sunset17_assets::register_era_ui_sprites(&mut atlas.sprites, &mut atlas.gui);
         // The era's names for the sky bodies: its `environment/sun.png` and the four by two
         // `moon_phases.png` sheet, which the 26.3 sky pass asks for by phase.
         if let Some(sun) = atlas.sprites.get("environment/sun").copied() {
@@ -1363,16 +1365,10 @@ impl HudAtlas {
                 );
             }
         }
-        let clouds = atlas
-            .sprites
-            .get("environment/clouds")
-            .map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        crate::clouds::set_era_texture(clouds);
         log::info!(
-            "Sunrise: 1.7.10 sky sprites: sun {}, moon phases {}, clouds {}",
+            "Sunrise: 1.7.10 sky sprites: sun {}, moon phases {}",
             atlas.sprites.contains_key("environment/sun"),
             atlas.sprites.contains_key("environment/moon_phases"),
-            clouds.is_some()
         );
         pack_text::load_shaders(&mut atlas, root, root);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
@@ -1443,6 +1439,7 @@ impl HudAtlas {
         Ok(Self {
             pictures: Default::default(),
             revision: Self::next_revision(),
+            era: root.profile() == sunrise_core::profile::Profile::V1_7_10,
             pixels: Vec::new(),
             packed: None,
             material_maps: Default::default(),
@@ -1515,6 +1512,7 @@ impl HudAtlas {
         Self {
             pictures: Default::default(),
             revision: Self::next_revision(),
+            era: false,
             font: crate::font::Font::load(
                 &crate::resource_source::ResourceSource::default(),
                 &sprites,
@@ -1902,6 +1900,9 @@ impl HudAtlas {
             }
         }
         images.push(("sunrise/white".into(), 4, 4, vec![255; 64]));
+        if !full && root.profile() == sunrise_core::profile::Profile::V1_7_10 {
+            images.extend(crate::sunset17_assets::era_ui_images(root));
+        }
         // The controller's art, unless a pack brought its own (walked above, as a mod's GUI
         // textures are).
         for image in crate::pad_glyph::images().chain(crate::mark_sprite::image()) {
@@ -2113,6 +2114,7 @@ impl HudAtlas {
         Ok(Self {
             pictures: std::sync::Mutex::new(pictures::Cache::new(root, defaults)),
             revision: Self::next_revision(),
+            era: root.profile() == sunrise_core::profile::Profile::V1_7_10,
             material_maps: std::sync::Arc::new(material_maps),
             galactic_widths: galactic_widths(&sprites, &pixels, width, height),
             pixels,

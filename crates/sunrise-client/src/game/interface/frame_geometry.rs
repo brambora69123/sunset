@@ -481,18 +481,42 @@ impl Game<'_> {
             );
             let packed_light = block_entity_render::vertex_light(light);
             // A 1.7.10 item has no model files: `ItemInHandRenderer.render`
-            // draws its sprite as a flat quad in the hand, at 1.7.10's pose.
-            if self.era_ui() {
-                if let Some(legacy) = sunrise_client::first_person::legacy_item_pose(
+            // draws 3D block shapes and extruded 2D items with the era's exact pose.
+            if self.era_ui()
+                && let Some(id) = sunrise_client::items_1_7_10::item_id(&stack.item)
+            {
+                let bow_ticks = match pose {
+                    ItemPose::Bow { ticks_used } => Some(ticks_used),
+                    _ => None,
+                };
+                let eat = match pose {
+                    ItemPose::Eat {
+                        remaining,
+                        duration,
+                        partial,
+                    } => Some((remaining - partial + 1.0, duration)),
+                    _ => None,
+                };
+                let block = hand == Hand::Main && legacy_block;
+                let era_pose = sunrise_client::items_1_7_10::first_person_item_matrix(
+                    id,
                     left,
                     inverse_height,
                     attack,
-                    pose,
-                    false,
+                    block,
+                    bow_ticks,
+                    eat,
+                );
+                if sunrise_client::items_1_7_10::emit_world_item(
+                    &self.gui.atlas,
+                    id,
+                    stack.damage as u16,
+                    to_world * era_pose,
+                    packed_light,
+                    true,
+                    self.gui_ticks.max(0) as u64,
+                    &mut out,
                 ) {
-                    m = to_world * legacy * sunrise_client::first_person::modern_flat_display(left);
-                }
-                if self.era_hand_quad(&stack, m, packed_light, &mut out) {
                     continue;
                 }
             }
@@ -505,63 +529,6 @@ impl Game<'_> {
             vertex.layer &= !sunrise_client::gfx::OIT_ENTITY;
         }
         (out, runs)
-    }
-
-    /// A 1.7.10 held item's flat sprite: `ItemInHandRenderer.render`'s
-    /// `draw` quad, at the hand pose `m`. The sprite is the era's own
-    /// (`ItemModelGenerator` has no model, so the icon is the item's texture);
-    /// the era's item atlas is the renderer's sprite array.
-    fn era_hand_quad(
-        &self,
-        stack: &ItemStack,
-        m: glam::Mat4,
-        light: u32,
-        out: &mut Vec<Vertex>,
-    ) -> bool {
-        let Some(id) = sunrise_client::items_1_7_10::item_id(&stack.item) else {
-            return false;
-        };
-        let Some(texture) =
-            sunrise_client::sunset17_assets::item_texture(i32::from(id), stack.damage as i32)
-        else {
-            return false;
-        };
-        let name = sunrise_client::sunset17_assets::sprite_name(&texture);
-        let Some(rect) = self.gui.atlas.gui_rect(&name).copied() else {
-            return false;
-        };
-        let corners = [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ];
-        let uv = [
-            [rect.u0, rect.v1],
-            [rect.u1, rect.v1],
-            [rect.u1, rect.v0],
-            [rect.u0, rect.v0],
-        ];
-        for back in [false, true] {
-            let indices = if back {
-                [0, 2, 1, 0, 3, 2]
-            } else {
-                [0, 1, 2, 0, 2, 3]
-            };
-            for i in indices {
-                let pos = m.transform_point3(glam::Vec3::from(corners[i]));
-                out.push(Vertex {
-                    pos: pos.to_array(),
-                    uv: uv[i],
-                    layer: 0,
-                    color: u32::MAX,
-                    light,
-                    normal: [0, 0, if back { 127 } else { -127 }, -127],
-                    glint_uv: [0.0, 0.0],
-                });
-            }
-        }
-        true
     }
     /// WeatherEffectRenderer: rain and snow columns within the weather radius.
     pub(super) fn weather_geometry(

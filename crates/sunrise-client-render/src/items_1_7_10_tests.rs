@@ -18,39 +18,44 @@ fn the_item_registry_names_the_eras_items() {
     assert_eq!(item_id("minecraft:record_wait"), Some(2267));
 }
 
-/// `BlockRenderer.isItem3d`'s cube shapes, as far as the icon painter covers
-/// them: full cubes draw the block, every other shape its `BlockItem` icon.
+/// `BlockRenderer.isItem3d`'s 3D shapes: cubes, slabs, stairs, fences, snow, cacti and
+/// anvils render in 3D, while crossed plants and plain items stay flat icons.
 #[test]
 fn full_cubes_draw_as_blocks_and_other_shapes_as_icons() {
-    let cube = |id: u16| drawn_as_block(block_of(id).expect("a block item"));
-    assert!(cube(1), "stone is a cube");
-    assert!(cube(2), "grass");
-    assert!(cube(17), "log");
-    assert!(cube(18), "leaves");
-    assert!(cube(20), "glass");
-    assert!(cube(79), "ice");
-    assert!(cube(155), "quartz");
-    assert!(!cube(44), "a slab keeps its flat icon");
-    assert!(!cube(53), "stairs keep their flat icon");
-    assert!(!cube(31), "tall grass is a crossed sprite");
-    assert!(!cube(145), "an anvil is no full cube");
-    assert!(!cube(78), "a snow layer");
-    assert!(!cube(81), "a cactus");
-    assert!(!cube(6), "a sapling is a crossed sprite");
-    // A plain item places no block, so it has no cube path at all.
+    assert!(is_3d_block_item(1), "stone is a cube");
+    assert!(is_3d_block_item(2), "grass");
+    assert!(is_3d_block_item(17), "log");
+    assert!(is_3d_block_item(18), "leaves");
+    assert!(is_3d_block_item(20), "glass");
+    assert!(is_3d_block_item(79), "ice");
+    assert!(is_3d_block_item(155), "quartz");
+    assert!(is_3d_block_item(44), "slab draws as a 3D half-block");
+    assert!(is_3d_block_item(53), "stairs draw as a 3D step");
+    assert!(is_3d_block_item(145), "anvil draws in 3D");
+    assert!(is_3d_block_item(78), "snow layer draws in 3D");
+    assert!(is_3d_block_item(81), "cactus draws in 3D");
+    assert!(!is_3d_block_item(31), "tall grass is a crossed sprite");
+    assert!(!is_3d_block_item(6), "a sapling is a crossed sprite");
+    // A plain item places no block, so it has no 3D block path.
     assert!(block_of(280).is_none(), "stick");
     assert!(block_of(331).is_none(), "redstone");
 }
 
 /// `ItemRenderer.renderGuiItem`'s block branch: three faces of the era's iso
-/// cube are visible and the cube fills the 16x16 slot at the era's scale.
+/// cube are visible, the cube fills the 16x16 slot at the era's scale, and
+/// both side faces map texture top (v=0) to y=1 (upright, not sideways or upside down).
 #[test]
 fn the_gui_cube_shows_the_top_south_and_west_faces() {
     let matrix = gui_block_matrix(0.0, 0.0);
-    let visible: Vec<usize> = (0..FACES.len())
+    let visible: Vec<usize> = (0..FACE_CORNERS.len())
         .filter(|&face| transform_normal(&matrix, FACE_NORMAL[face])[2] > 0.0)
         .collect();
     assert_eq!(visible, [1, 3, 4], "top, south and west face the viewer");
+    // South (right face) and west (left face): top corners map to v=0, bottom corners to v=1.
+    assert_eq!(face_uv(3, [0.0, 1.0, 1.0]), [0.0, 0.0]);
+    assert_eq!(face_uv(3, [1.0, 0.0, 1.0]), [1.0, 1.0]);
+    assert_eq!(face_uv(4, [0.0, 1.0, 0.0]), [0.0, 0.0]);
+    assert_eq!(face_uv(4, [0.0, 0.0, 1.0]), [1.0, 1.0]);
 
     // The projected cube in a slot at (0, 0): 14.142 x 15.731 pixels,
     // from (x + 0.929, y + 0.134) to (x + 15.071, y + 15.866). The values come
@@ -88,8 +93,8 @@ fn the_cube_takes_the_blocks_fixed_colours() {
     };
     assert_eq!(
         tint(2, 0),
-        0xFF_FF_FF,
-        "grass draws white in `renderAsItem`"
+        GRASS_COLOR,
+        "grass top draws with ColorizerGrass(0.5, 1.0)"
     );
     assert_eq!(
         tint(18, 0),
@@ -104,9 +109,9 @@ fn the_cube_takes_the_blocks_fixed_colours() {
         "`Leaves2Block` keeps the default foliage colour"
     );
     assert_eq!(tint(1, 0), 0xFF_FF_FF, "stone");
-    // A `ColoredBlockItem` stores the dye value; the block metadata is inverted.
-    assert_eq!(block_metadata(35, 0), 15, "white wool");
-    assert_eq!(block_metadata(35, 15), 0, "black wool");
+    // `ItemCloth` passes damage straight through: 0 is white wool, 15 is black wool.
+    assert_eq!(block_metadata(35, 0), 0, "white wool");
+    assert_eq!(block_metadata(35, 15), 15, "black wool");
     assert_eq!(
         block_metadata(61, 2),
         3,
@@ -157,4 +162,92 @@ fn an_animated_sprite_shows_one_frame_per_tick() {
         h: 16,
     };
     assert_eq!(frame_rect(still, 7), still);
+}
+
+#[test]
+fn held_item_classification_and_matrices_match_1_7_10() {
+    assert!(is_handheld(276), "diamond sword is handheld");
+    assert!(is_handheld(280), "stick is handheld");
+    assert!(
+        is_handheld(346) && should_rotate(346),
+        "fishing rod rotates"
+    );
+    assert!(is_bow(261), "bow");
+    assert!(!is_handheld(260), "apple is not handheld");
+
+    // In first person at rest, the diamond sword hilt (+0.5, -0.5) stays near the bottom-right grip,
+    // while the blade tip (-0.5, +0.5) extends forward (-Z) and upward compared to the hilt.
+    let fp = first_person_item_matrix(276, false, 0.0, 0.0, false, None, None);
+    let hilt = fp.transform_point3(glam::Vec3::new(0.5, -0.5, 0.0));
+    let tip = fp.transform_point3(glam::Vec3::new(-0.5, 0.5, 0.0));
+    assert!(
+        tip.y > hilt.y,
+        "sword tip ({tip:?}) sits above hilt ({hilt:?})"
+    );
+    assert!(
+        tip.z > hilt.z,
+        "sword tip tilts toward viewer relative to hilt ({hilt:?})"
+    );
+
+    // Third person mirrors left hand along X cleanly.
+    let tp_right = third_person_item_matrix(276, false, false);
+    let tp_left = third_person_item_matrix(276, true, false);
+    let pr = tp_right.transform_point3(glam::Vec3::ZERO);
+    let pl = tp_left.transform_point3(glam::Vec3::ZERO);
+    assert!((pr.x + pl.x).abs() < 1e-5 && (pr.y - pl.y).abs() < 1e-5);
+}
+
+#[test]
+fn emit_world_item_extrudes_flat_sprites_and_builds_stairs_boxes() {
+    let mut atlas = HudAtlas::fonts(&Default::default()).unwrap();
+    let sword_rect = Rect {
+        u0: 0.0,
+        v0: 0.0,
+        u1: 0.25,
+        v1: 0.25,
+        w: 16,
+        h: 16,
+    };
+    let planks_rect = Rect {
+        u0: 0.25,
+        v0: 0.0,
+        u1: 0.5,
+        v1: 0.25,
+        w: 16,
+        h: 16,
+    };
+    atlas
+        .sprites
+        .insert("items/diamond_sword".to_owned(), sword_rect);
+    atlas
+        .sprites
+        .insert("blocks/planks_oak".to_owned(), planks_rect);
+
+    let mut flat_verts = Vec::new();
+    assert!(emit_world_item(
+        &atlas,
+        276,
+        0,
+        glam::Mat4::IDENTITY,
+        0x00F0_00F0,
+        true,
+        0,
+        &mut flat_verts,
+    ));
+    // 1 front + 1 back + 16*4 extruded edge slices = 66 quads = 264 vertices.
+    assert_eq!(flat_verts.len(), 66 * 4);
+
+    let mut stairs_verts = Vec::new();
+    assert!(emit_world_item(
+        &atlas,
+        53,
+        0,
+        glam::Mat4::IDENTITY,
+        0x00F0_00F0,
+        true,
+        0,
+        &mut stairs_verts,
+    ));
+    // Oak stairs have 2 boxes * 6 faces = 12 quads = 48 vertices.
+    assert_eq!(stairs_verts.len(), 12 * 4);
 }

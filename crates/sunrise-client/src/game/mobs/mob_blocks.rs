@@ -498,6 +498,42 @@ impl Game<'_> {
                 sunrise_client::cit::Hand::Main
             };
             let mut state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
+            if state.is_empty()
+                && self.era_ui()
+                && let Some(id) = sunrise_client::items_1_7_10::item_id(&stack.item)
+            {
+                let arm = sunrise_client::mobs::render::hand_arm_transform(
+                    mob,
+                    alpha as f32,
+                    camera,
+                    self,
+                    left,
+                )
+                .unwrap_or(t);
+                let blocking = !off_hand
+                    && owner.using_this_item
+                    && matches!(
+                        &*stack.item,
+                        "minecraft:wooden_sword"
+                            | "minecraft:stone_sword"
+                            | "minecraft:iron_sword"
+                            | "minecraft:golden_sword"
+                            | "minecraft:diamond_sword"
+                    );
+                let pose = arm
+                    * sunrise_client::items_1_7_10::third_person_item_matrix(id, left, blocking);
+                sunrise_client::items_1_7_10::emit_world_item(
+                    &self.gui.atlas,
+                    id,
+                    stack.damage as u16,
+                    pose,
+                    light,
+                    in_world,
+                    self.gui_ticks.max(0) as u64,
+                    out,
+                );
+                continue;
+            }
             if in_world {
                 let entity_id = if local_player {
                     self.own_entity_id() as u32

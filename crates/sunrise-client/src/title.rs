@@ -108,8 +108,29 @@ fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
 /// box of its lines and 4 px padding, the checkbox, then the buttons, 8 px
 /// apart): the title's top.
 /// `LogoRenderer.extractRenderState`: the logo's top 44 of 64 rows, then the
-/// edition banner's top 14 of 16 rows overlapping its bottom by 7.
+/// edition banner's top 14 of 16 rows overlapping its bottom by 7. On a 1.7.10
+/// root (`minecraft.png` is 256x256 with the logo split into two 155x44 halves
+/// at y=0 and y=45), draw `TitleScreen`'s two halves side by side at
+/// `(w / 2 - 137, 30)` and skip the missing edition banner.
 fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
+    if let Some(r) = atlas.gui_rect("gui/title/minecraft").copied()
+        && r.w == r.h
+        && r.w >= 256
+    {
+        let (du, dv) = ((r.u1 - r.u0) / 256.0, (r.v1 - r.v0) / 256.0);
+        let half = |y: f32| sunrise_client_render::hud::Rect {
+            u0: r.u0,
+            v0: r.v0 + y * dv,
+            u1: r.u0 + 155.0 * du,
+            v1: r.v0 + (y + 44.0) * dv,
+            w: 155,
+            h: 44,
+        };
+        let x = (w / 2.0).floor() - 137.0;
+        batch.rect_uv(x, 30.0, 155.0, 44.0, half(0.0), u32::MAX);
+        batch.rect_uv(x + 155.0, 30.0, 155.0, 44.0, half(45.0), u32::MAX);
+        return;
+    }
     batch.sprite_region(
         atlas,
         "gui/title/minecraft",

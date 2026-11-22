@@ -322,6 +322,547 @@ pub fn alias_entity_textures(sprites: &mut HashMap<String, crate::hud::Rect>) {
     }
 }
 
+/// Synthesised 1.7.10 UI textures packed into [`crate::hud::HudAtlas`] so shared screens
+/// (title, pause, options, world select, lists, text fields) draw with the era's palette
+/// instead of missing 26.3 sprite files.
+pub(crate) fn era_ui_images(
+    root: &crate::resource_source::ResourceSource,
+) -> Vec<(String, u32, u32, Vec<u8>)> {
+    let mut out = Vec::new();
+    // `GuiScreen.drawBackground`: `options_background.png` tiled at (64,64,64), and
+    // `GuiSlot` list backgrounds at (32,32,32).
+    if let Ok(bytes) = root.read("assets/minecraft/textures/gui/options_background.png")
+        && let Ok((w, h, rgba)) = crate::hud::decode_bytes(&bytes)
+    {
+        let tint = |scale: u32| -> Vec<u8> {
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| {
+                    [
+                        ((u32::from(p[0]) * scale) / 255) as u8,
+                        ((u32::from(p[1]) * scale) / 255) as u8,
+                        ((u32::from(p[2]) * scale) / 255) as u8,
+                        p[3],
+                    ]
+                })
+                .collect()
+        };
+        let menu_bg = tint(64);
+        let list_bg = tint(32);
+        out.push(("gui/menu_background".to_owned(), w, h, menu_bg));
+        out.push(("gui/menu_list_background".to_owned(), w, h, list_bg.clone()));
+        out.push(("gui/inworld_menu_list_background".to_owned(), w, h, list_bg));
+    }
+    let solid = |w: u32, h: u32, px: [u8; 4]| -> Vec<u8> {
+        std::iter::repeat_n(px, (w * h) as usize)
+            .flatten()
+            .collect()
+    };
+    out.push((
+        "gui/inworld_menu_background".to_owned(),
+        4,
+        4,
+        solid(4, 4, [16, 16, 16, 192]),
+    ));
+    for name in [
+        "gui/header_separator",
+        "gui/footer_separator",
+        "gui/inworld_header_separator",
+        "gui/inworld_footer_separator",
+    ] {
+        out.push((name.to_owned(), 2, 2, solid(2, 2, [0, 0, 0, 220])));
+    }
+    let bordered = |w: u32, h: u32, fill: [u8; 4], border: [u8; 4]| -> Vec<u8> {
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let edge = x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+                buf.extend_from_slice(if edge { &border } else { &fill });
+            }
+        }
+        buf
+    };
+    // `GuiTextField`: black fill with #A0A0A0 border (or white when focused).
+    out.push((
+        "era_ui/text_field".to_owned(),
+        16,
+        16,
+        bordered(16, 16, [0, 0, 0, 255], [160, 160, 160, 255]),
+    ));
+    out.push((
+        "era_ui/text_field_highlighted".to_owned(),
+        16,
+        16,
+        bordered(16, 16, [0, 0, 0, 255], [255, 255, 255, 255]),
+    ));
+    // `GuiSlot` scrollbar: black track and grey thumb with light bevel.
+    out.push((
+        "era_ui/scroller_background".to_owned(),
+        4,
+        4,
+        solid(4, 4, [0, 0, 0, 255]),
+    ));
+    let mut scroller = Vec::with_capacity(6 * 6 * 4);
+    for y in 0..6 {
+        for x in 0..6 {
+            let px = if x == 5 || y == 5 {
+                [128, 128, 128, 255]
+            } else if x == 0 || y == 0 {
+                [192, 192, 192, 255]
+            } else {
+                [160, 160, 160, 255]
+            };
+            scroller.extend_from_slice(&px);
+        }
+    }
+    out.push(("era_ui/scroller".to_owned(), 6, 6, scroller));
+    // Checkboxes: 17x17 dark box with crisp border and white checkmark when selected.
+    for (name, checked, lit) in [
+        ("era_ui/checkbox", false, false),
+        ("era_ui/checkbox_highlighted", false, true),
+        ("era_ui/checkbox_selected", true, false),
+        ("era_ui/checkbox_selected_highlighted", true, true),
+    ] {
+        let border = if lit {
+            [255, 255, 255, 255]
+        } else {
+            [160, 160, 160, 255]
+        };
+        let mut buf = bordered(17, 17, [32, 32, 32, 255], border);
+        if checked {
+            let pts: &[(u32, u32)] = &[
+                (3, 8),
+                (4, 9),
+                (5, 10),
+                (6, 11),
+                (7, 12),
+                (8, 11),
+                (9, 10),
+                (10, 9),
+                (11, 8),
+                (12, 7),
+                (13, 6),
+                (13, 5),
+                (4, 8),
+                (5, 9),
+                (6, 10),
+                (7, 11),
+                (8, 10),
+                (9, 9),
+                (10, 8),
+                (11, 7),
+                (12, 6),
+            ];
+            for &(x, y) in pts {
+                let i = ((y * 17 + x) * 4) as usize;
+                buf[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+        out.push((name.to_owned(), 17, 17, buf));
+    }
+    // Classic 15x15 monochrome UI icons so TitleScreen's Accessibility and Friends buttons
+    // do not render empty boxes when modern `gui/sprites/icon/*` sheets are absent.
+    let icon_from_bitmap = |rows: [&str; 15]| -> Vec<u8> {
+        let mut buf = Vec::with_capacity(15 * 15 * 4);
+        for row in rows {
+            for ch in row.chars().take(15) {
+                let px = match ch {
+                    '#' => [255, 255, 255, 255],
+                    'o' => [200, 200, 200, 255],
+                    _ => [0, 0, 0, 0],
+                };
+                buf.extend_from_slice(&px);
+            }
+        }
+        buf
+    };
+    out.push((
+        "era_ui/icon_accessibility".to_owned(),
+        15,
+        15,
+        icon_from_bitmap([
+            ".......#.......",
+            "......###......",
+            ".......#.......",
+            "...............",
+            "..###########..",
+            "......###......",
+            "......###......",
+            "......###......",
+            "......###......",
+            ".....##.##.....",
+            ".....##.##.....",
+            "....##...##....",
+            "....##...##....",
+            "...##.....##...",
+            "...............",
+        ]),
+    ));
+    out.push((
+        "era_ui/icon_friends".to_owned(),
+        15,
+        15,
+        icon_from_bitmap([
+            "...............",
+            "...##.....##...",
+            "..####...####..",
+            "..####...####..",
+            "...##.....##...",
+            "...............",
+            "..####...####..",
+            ".######.######.",
+            ".######.######.",
+            ".######.######.",
+            ".######.######.",
+            "...............",
+            "...............",
+            "...............",
+            "...............",
+        ]),
+    ));
+    out
+}
+
+/// Register 1.7.10's widget rects (`gui/widgets.png` buttons, sliders, tabs and the
+/// synthesised controls from [`era_ui_images`]) under the 26.3 GUI sprite ids shared menus
+/// read (`widget/button`, `gui/sprites/widget/button`, ...).
+pub(crate) fn register_era_ui_sprites(
+    sprites: &mut HashMap<String, crate::hud::Rect>,
+    gui: &mut HashMap<String, crate::hud::GuiSprite>,
+) {
+    use crate::hud::{GuiSprite, Rect};
+    use crate::ui::NineSlice;
+    let sub = |base: Rect, x: f32, y: f32, w: f32, h: f32| -> Rect {
+        let (du, dv) = ((base.u1 - base.u0) / 256.0, (base.v1 - base.v0) / 256.0);
+        Rect {
+            u0: base.u0 + x * du,
+            v0: base.v0 + y * dv,
+            u1: base.u0 + (x + w) * du,
+            v1: base.v0 + (y + h) * dv,
+            w: w as u32,
+            h: h as u32,
+        }
+    };
+    let put = |sprites: &mut HashMap<String, Rect>,
+               gui: &mut HashMap<String, GuiSprite>,
+               id: &str,
+               rect: Rect,
+               scaling: Option<NineSlice>| {
+        let entry = GuiSprite::Present { rect, scaling };
+        gui.insert(id.to_owned(), entry);
+        gui.insert(format!("gui/sprites/{id}"), entry);
+        sprites.insert(format!("gui/sprites/{id}"), rect);
+    };
+    if let Some(widgets) = sprites.get("gui/widgets").copied() {
+        let btn_slice = Some(NineSlice::new(200, 20, [3, 3, 3, 3], false));
+        let disabled = sub(widgets, 0.0, 46.0, 200.0, 20.0);
+        let normal = sub(widgets, 0.0, 66.0, 200.0, 20.0);
+        let hover = sub(widgets, 0.0, 86.0, 200.0, 20.0);
+        put(sprites, gui, "widget/button_disabled", disabled, btn_slice);
+        put(sprites, gui, "widget/button", normal, btn_slice);
+        put(sprites, gui, "widget/button_highlighted", hover, btn_slice);
+        // 1.7.10 `GuiOptionSlider`: disabled button track, normal/hover button ends as handle.
+        put(sprites, gui, "widget/slider", disabled, btn_slice);
+        put(
+            sprites,
+            gui,
+            "widget/slider_highlighted",
+            disabled,
+            btn_slice,
+        );
+        put(sprites, gui, "widget/slider_handle", normal, btn_slice);
+        put(
+            sprites,
+            gui,
+            "widget/slider_handle_highlighted",
+            hover,
+            btn_slice,
+        );
+        put(sprites, gui, "widget/tab", disabled, btn_slice);
+        put(sprites, gui, "widget/tab_highlighted", hover, btn_slice);
+        put(sprites, gui, "widget/tab_selected", normal, btn_slice);
+        put(
+            sprites,
+            gui,
+            "widget/tab_selected_highlighted",
+            hover,
+            btn_slice,
+        );
+        put(
+            sprites,
+            gui,
+            "widget/slot_frame",
+            sub(widgets, 0.0, 22.0, 24.0, 22.0),
+            Some(NineSlice::new(24, 22, [3, 3, 3, 3], false)),
+        );
+        put(
+            sprites,
+            gui,
+            "icon/language",
+            sub(widgets, 0.0, 106.0, 20.0, 20.0),
+            None,
+        );
+    }
+    let field_slice = Some(NineSlice::new(16, 16, [1, 1, 1, 1], true));
+    for (src, dst, slice) in [
+        ("era_ui/text_field", "widget/text_field", field_slice),
+        (
+            "era_ui/text_field_highlighted",
+            "widget/text_field_highlighted",
+            field_slice,
+        ),
+        ("era_ui/checkbox", "widget/checkbox", None),
+        (
+            "era_ui/checkbox_highlighted",
+            "widget/checkbox_highlighted",
+            None,
+        ),
+        ("era_ui/checkbox_selected", "widget/checkbox_selected", None),
+        (
+            "era_ui/checkbox_selected_highlighted",
+            "widget/checkbox_selected_highlighted",
+            None,
+        ),
+        (
+            "era_ui/scroller_background",
+            "widget/scroller_background",
+            None,
+        ),
+        (
+            "era_ui/scroller",
+            "widget/scroller",
+            Some(NineSlice::new(6, 6, [1, 1, 1, 1], true)),
+        ),
+        ("era_ui/icon_accessibility", "icon/accessibility", None),
+        ("era_ui/icon_friends", "friends/friends", None),
+    ] {
+        if let Some(rect) = sprites.get(src).copied() {
+            put(sprites, gui, dst, rect, slice);
+        }
+    }
+}
+
+/// English fallbacks for modern UI and command keys that 1.7.10's `en_US.lang` does not carry,
+/// layered underneath `en_US.lang` so the era's own strings always win.
+pub fn modern_ui_fallbacks() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("options.generic_value", "%s: %s"),
+        ("options.online", "Online..."),
+        ("options.online.title", "Online Options"),
+        ("options.skinCustomisation", "Skin Customization..."),
+        ("options.skinCustomisation.title", "Skin Customization"),
+        ("options.chat", "Chat Settings..."),
+        ("options.chat.title", "Chat Settings"),
+        ("options.accessibility", "Accessibility Settings..."),
+        ("options.accessibility.title", "Accessibility Settings"),
+        (
+            "options.credits_and_attribution",
+            "Credits & Attribution...",
+        ),
+        ("options.chunks", "%s chunks"),
+        ("options.blocks", "%s blocks"),
+        ("options.framerate", "%s fps"),
+        ("options.gamma.default", "Default"),
+        ("options.clouds.fast", "Fast"),
+        ("options.clouds.fancy", "Fancy"),
+        ("options.entityShadows", "Entity Shadows"),
+        ("options.autoJump", "Auto-Jump"),
+        ("options.attackIndicator", "Attack Indicator"),
+        ("options.attack.crosshair", "Crosshair"),
+        ("options.attack.hotbar", "Hotbar"),
+        ("options.mainHand", "Main Hand"),
+        ("options.mainHand.left", "Left"),
+        ("options.mainHand.right", "Right"),
+        ("options.biomeBlendRadius", "Biome Blend"),
+        ("options.entityDistanceScaling", "Entity Distance"),
+        ("options.improvedTransparency", "Improved Transparency"),
+        ("options.cutoutLeaves", "Cutout Leaves"),
+        ("options.glintSpeed", "Glint Speed"),
+        ("options.glintStrength", "Glint Strength"),
+        ("options.fovEffectScale", "FOV Effects"),
+        ("options.damageTiltStrength", "Damage Tilt"),
+        ("options.darknessEffectScale", "Darkness Pulsing"),
+        ("options.hideLightningFlashes", "Hide Lightning Flashes"),
+        ("options.hideSplashTexts", "Hide Splash Texts"),
+        ("options.autosaveIndicator", "Autosave Indicator"),
+        ("options.key.hold", "Hold"),
+        ("options.key.toggle", "Toggle"),
+        ("options.invertMouseX", "Invert X"),
+        ("options.invertMouseY", "Invert Y"),
+        ("options.discrete_mouse_scroll", "Discrete Scrolling"),
+        ("options.audioDevice", "Device"),
+        ("options.audioDevice.default", "System Default"),
+        ("options.directionalAudio", "Directional Audio"),
+        ("options.graphics.preset", "Graphics Preset"),
+        ("options.graphicsApi", "Graphics API"),
+        ("options.graphicsApi.default", "Default"),
+        ("options.graphicsApi.vulkan", "Vulkan"),
+        ("options.graphicsApi.opengl", "OpenGL"),
+        ("options.maxAnisotropy", "Anisotropic Filtering"),
+        ("options.chunkFade", "Chunk Fade"),
+        ("options.chunkFade.none", "Off"),
+        ("options.chunkFade.seconds", "%ss"),
+        ("options.inactivityFpsLimit", "Reduce FPS When"),
+        ("options.inactivityFpsLimit.minimized", "Minimized"),
+        ("options.inactivityFpsLimit.afk", "AFK"),
+        ("options.exclusiveFullscreen", "Exclusive Fullscreen"),
+        ("options.exclusiveFullscreen.on", "ON"),
+        ("options.exclusiveFullscreen.off", "OFF"),
+        ("options.fullscreen.current", "Current"),
+        ("options.fullscreen.unavailable", "Unavailable"),
+        (
+            "options.accessibility.menu_background_blurriness",
+            "Menu Background Blur",
+        ),
+        (
+            "options.accessibility.text_background_opacity",
+            "Text Background Opacity",
+        ),
+        ("options.accessibility.text_background", "Text Background"),
+        ("options.accessibility.text_background.chat", "Chat"),
+        (
+            "options.accessibility.text_background.everywhere",
+            "Everywhere",
+        ),
+        ("options.accessibility.high_contrast", "High Contrast"),
+        (
+            "options.accessibility.high_contrast_block_outline",
+            "High Contrast Block Outline",
+        ),
+        (
+            "options.accessibility.panorama_speed",
+            "Panorama Scroll Speed",
+        ),
+        ("options.accessibility.narrator_hotkey", "Narrator Hotkey"),
+        ("options.chat.line_spacing", "Line Spacing"),
+        ("options.chat.delay", "Chat Delay"),
+        ("options.chat.drafts", "Save Chat Drafts"),
+        ("options.allowServerListing", "Allow Server Listings"),
+        ("options.autoSuggestCommands", "Command Suggestions"),
+        ("options.allowCursorChanges", "Allow Cursor Changes"),
+        (
+            "options.ctrlClickEmulatesRightClick",
+            "Ctrl+Click Right-Click",
+        ),
+        (
+            "options.darkMojangStudiosBackgroundColor",
+            "Monochrome Logo",
+        ),
+        ("options.language.title", "Language"),
+        ("options.font.title", "Font Settings"),
+        ("controls.keybinds", "Key Binds..."),
+        ("controls.keybinds.title", "Key Binds"),
+        ("gui.advancements", "Achievements"),
+        ("gui.continue", "Continue"),
+        ("gui.proceed", "Proceed"),
+        ("gui.acknowledge", "OK"),
+        ("gui.friends.open", "Friends"),
+        ("gui.selectWorld.search", "Search..."),
+        ("options.worldOptions.button", "World Options..."),
+        ("options.worldOptions.title", "World Options"),
+        ("options.worldOptions.general.title", "General"),
+        ("options.worldOptions.multiplayer.title", "Multiplayer"),
+        ("options.worldOptions.game_mode", "Default Game Mode"),
+        (
+            "options.worldOptions.personal_game_mode",
+            "Personal Game Mode",
+        ),
+        (
+            "options.worldOptions.guest.command_access",
+            "Guest Command Access",
+        ),
+        (
+            "options.worldOptions.guest.force_game_mode",
+            "Force Game Mode",
+        ),
+        ("menu.multiplayerOptions.lan", "Open to LAN"),
+        ("lanServer.port", "Port Number"),
+        ("menu.sendFeedback", "Send Feedback"),
+        ("menu.reportBugs", "Report Bugs"),
+        ("menu.playerReporting", "Player Reporting"),
+        ("menu.server_links", "Server Links..."),
+        ("chat.square_brackets", "[%s]"),
+        ("chat.coordinates.tooltip", "Click to teleport"),
+        ("chat.copy.click", "Click to Copy to Clipboard"),
+        (
+            "accessibility.onboarding.screen.title",
+            "Welcome to Minecraft!\n\nWould you like to enable the Narrator or visit the Accessibility Settings?",
+        ),
+        (
+            "accessibility.onboarding.accessibility.button",
+            "Accessibility Settings...",
+        ),
+        ("options.narrator", "Narrator"),
+        ("options.narrator.notavailable", "Not Available"),
+        (
+            "multiplayerWarning.header",
+            "Caution: Third-Party Online Play",
+        ),
+        ("multiplayerWarning.check", "Do not show this screen again"),
+        ("selectWorld.version", "Version:"),
+        ("selectWorld.versionUnknown", "unknown"),
+        ("selectWorld.commands", "Commands"),
+        ("selectWorld.edit", "Edit"),
+        ("selectWorld.edit.title", "Edit World"),
+        ("selectWorld.edit.save", "Save"),
+        ("selectWorld.edit.backup", "Make Backup"),
+        ("selectWorld.edit.openFolder", "Open World Folder"),
+        ("selectWorld.edit.resetIcon", "Reset Icon"),
+        ("selectWorld.edit.optimize", "Optimize World"),
+        (
+            "controls.keybinds.duplicateKeybinds",
+            "Key is bound to multiple actions",
+        ),
+        ("options.percent_value", "%s: %s%%"),
+        ("options.pixel_value", "%s: %spx"),
+        ("options.chat.delay_none", "None"),
+        ("pack.openFolder", "Open Pack Folder"),
+        ("pack.nameAndSource", "%s (%s)"),
+        ("createWorld.tab.game.title", "Game"),
+        ("createWorld.tab.world.title", "World"),
+        ("createWorld.tab.more.title", "More"),
+        ("createWorld.preparing", "Preparing for world creation..."),
+        (
+            "commands.give.failed.toomanyitems",
+            "Cannot give more than %s items",
+        ),
+        ("commands.give.success.single", "Gave %s %s to %s"),
+        ("commands.give.success.multiple", "Gave %s %s to %s players"),
+        ("commands.gamemode.success.self", "Set own game mode to %s"),
+        (
+            "commands.gamemode.success.other",
+            "Set %s's game mode to %s",
+        ),
+        ("commands.time.set", "Set the time to %s"),
+        (
+            "commands.tp.success.coordinates",
+            "Teleported %s to %s, %s, %s",
+        ),
+        (
+            "commands.teleport.success.location.single",
+            "Teleported %s to %s, %s, %s",
+        ),
+        (
+            "commands.teleport.success.entity.single",
+            "Teleported %s to %s",
+        ),
+        (
+            "commands.effect.give.success.single",
+            "Applied effect %s to %s",
+        ),
+        (
+            "commands.effect.clear.everything.success.single",
+            "Removed every effect from %s",
+        ),
+        (
+            "commands.enchant.success.single",
+            "Applied enchantment %s to %s",
+        ),
+        ("commands.kill.success.single", "Killed %s"),
+    ]
+}
+
 fn texture_stems<'a>(files: &'a [String], folder: &'a str) -> impl Iterator<Item = &'a str> {
     files
         .iter()

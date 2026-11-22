@@ -2548,16 +2548,14 @@ fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat
             * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
     )
 }
-/// The hand of a mob in model space, up to the item's own transform
-/// (`ItemInHandLayer.submitArmWithItem`).
-fn hand_base(
+fn hand_arm_part(
     m: &Mob,
     model: &Part,
     base: glam::Mat4,
     poses: &Poses,
     anchors: &[(String, String, [f32; 3])],
     left: bool,
-) -> Option<glam::Mat4> {
+) -> Option<(glam::Mat4, bool)> {
     // A pack's `attachments` anchor (`right_handheld_item`...) replaces the whole hand
     // anchor: the walk to the part that declares it and its offset, none of the vanilla
     // hand's own transforms — EMF's one-off override during `translateToHand`. Without one
@@ -2573,7 +2571,7 @@ fn hand_base(
             "right_handheld_item"
         },
     ) {
-        return Some(t);
+        return Some((t, true));
     }
     let skeleton = matches!(
         m.species(),
@@ -2593,11 +2591,27 @@ fn hand_base(
     } else {
         0.0
     };
-    let mut t = if m.species() == Species::Allay {
+    let t = if m.species() == Species::Allay {
         allay_hand(model, base, poses)?
     } else {
         part_matrix(model, base, poses, arm, offset)?
     };
+    Some((t, false))
+}
+/// The hand of a mob in model space, up to the item's own transform
+/// (`ItemInHandLayer.submitArmWithItem`).
+fn hand_base(
+    m: &Mob,
+    model: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    anchors: &[(String, String, [f32; 3])],
+    left: bool,
+) -> Option<glam::Mat4> {
+    let (mut t, attached) = hand_arm_part(m, model, base, poses, anchors, left)?;
+    if attached {
+        return Some(t);
+    }
     if m.species() == Species::Vex {
         // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
         t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
@@ -2630,6 +2644,22 @@ fn hand_base(
         oz / 16.0,
     ));
     Some(t)
+}
+/// The raw arm bone transform for 1.7.10 held items (`ModelBiped.rightArm.transform(0.0625)`),
+/// before 26.3's `Rx(-90)*Ry(180)*T` hand offset.
+pub fn hand_arm_transform(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &dyn RenderDataSource,
+    left: bool,
+) -> Option<glam::Mat4> {
+    if !super::illager::shows_item(m) {
+        return None;
+    }
+    let base = base_transform(m, alpha, camera);
+    let (model, poses, anchors) = posed_body(m, alpha, data);
+    hand_arm_part(m, &model, base, &poses, &anchors, left).map(|(t, _)| t)
 }
 /// The transform of one of a mob's model parts, in camera space
 /// (`ModelPart.translateAndRotate` down the tree).
