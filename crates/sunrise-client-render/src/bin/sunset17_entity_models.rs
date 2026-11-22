@@ -1,5 +1,7 @@
 //! Prints the 1.7.10 entity model table as data, so a reviewer can compare every bone, box
-//! and texture offset with the era's own `Model*` classes.
+//! and texture offset with the era's own `Model*` classes: each bone's pivot and rest
+//! rotation, and each box's low and high corner once the part tree's pivots and rotations
+//! place it in model space (the numbers the era's `ModelPart.render` draws).
 //!
 //! Usage: `sunset17_entity_models [ROOT]` (`SUNSET_1_7_CONTENT` or
 //! `.local/sunrise-client/1.7.10` by default). The table itself needs no files; when `ROOT`
@@ -22,7 +24,7 @@ fn main() {
             "\n{} texture={} size={}x{}",
             model.name, model.texture, model.texture_size[0], model.texture_size[1]
         );
-        print_bones(model.bones, 1);
+        print_bones(model, model.bones, 1);
     }
 
     println!("\n1.7.10 entity types (the era's setSize/initAttributes)");
@@ -79,7 +81,7 @@ fn main() {
     }
 }
 
-fn print_bones(bones: &[Bone], depth: usize) {
+fn print_bones(model: &sunset17_assets::Model, bones: &[Bone], depth: usize) {
     for bone in bones {
         let indent = "  ".repeat(depth);
         let parent = bone.parent.map_or("root", |parent| parent);
@@ -94,8 +96,9 @@ fn print_bones(bones: &[Bone], depth: usize) {
             bone.rotation[2]
         );
         for cube in bone.cubes {
+            let (low, high) = sunset17_assets::model_space_bounds(model, bone, cube);
             println!(
-                "{indent}  box origin=({}, {}, {}) size=({}, {}, {}) uv=({}, {}) inflate={} mirror={}",
+                "{indent}  box origin=({}, {}, {}) size=({}, {}, {}) uv=({}, {}) inflate={} mirror={} model=({}, {}, {})..({}, {}, {})",
                 cube.origin[0],
                 cube.origin[1],
                 cube.origin[2],
@@ -105,8 +108,20 @@ fn print_bones(bones: &[Bone], depth: usize) {
                 cube.uv[0],
                 cube.uv[1],
                 cube.inflate,
-                cube.mirror
+                cube.mirror,
+                round(low[0]),
+                round(low[1]),
+                round(low[2]),
+                round(high[0]),
+                round(high[1]),
+                round(high[2])
             );
         }
     }
+}
+
+/// A model-space coordinate to a pixel's ten-thousandth: a quarter turn's `cos` is not
+/// exactly zero in `f32`.
+fn round(value: f32) -> f32 {
+    (value * 10_000.0).round() / 10_000.0
 }

@@ -121,6 +121,9 @@ const ZERO: [f32; 3] = [0.0, 0.0, 0.0];
 const LIE_DOWN: [f32; 3] = [std::f32::consts::FRAC_PI_2, 0.0, 0.0];
 /// `ModelSpider.setupAnimation`'s splay `float var8 = PI / 4`.
 const SPIDER_SPLAY: f32 = std::f32::consts::FRAC_PI_4;
+/// `ModelSpider.setupAnimation`'s `float var10 = PI / 8`: the legs' sideways splay, half
+/// the PI/4 they drop by.
+const SPIDER_YAW: f32 = std::f32::consts::FRAC_PI_8;
 
 // `ModelBiped`/`HumanoidModel` (player, zombie, skeleton share it).
 const HEAD: Bone = bone(
@@ -154,14 +157,14 @@ const LEFT_ARM: Bone = bone(
 const RIGHT_LEG: Bone = bone(
     "right_leg",
     None,
-    [-1.9, 12.0, 0.1],
+    [-1.9, 12.0, 0.0],
     ZERO,
     &[cube([-2.0, 0.0, -2.0], [4, 12, 4], [0, 16], 0.0, false)],
 );
 const LEFT_LEG: Bone = bone(
     "left_leg",
     None,
-    [1.9, 12.0, 0.1],
+    [1.9, 12.0, 0.0],
     ZERO,
     &[cube([-2.0, 0.0, -2.0], [4, 12, 4], [0, 16], 0.0, true)],
 );
@@ -235,7 +238,8 @@ pub const MODELS_TABLE: &[Model] = &[
             ),
         ],
     },
-    // `CreeperModel`: the hat is the 0.5-px outer layer; the legs end at y=16.
+    // `CreeperModel`: no hat layer — the era's render never draws `CreeperModel.hat` (the
+    // charged overlay is its own render pass); the legs end at y=16.
     Model {
         name: "minecraft:creeper#main",
         texture: "textures/entity/creeper/creeper.png",
@@ -247,13 +251,6 @@ pub const MODELS_TABLE: &[Model] = &[
                 [0.0, 4.0, 0.0],
                 ZERO,
                 &[cube([-4.0, -8.0, -4.0], [8, 8, 8], [0, 0], 0.0, false)],
-            ),
-            bone(
-                "hat",
-                Some("head"),
-                ZERO,
-                ZERO,
-                &[cube([-4.0, -8.0, -4.0], [8, 8, 8], [32, 0], 0.5, false)],
             ),
             bone(
                 "body",
@@ -599,56 +596,56 @@ pub const MODELS_TABLE: &[Model] = &[
                 "right_hind_leg",
                 None,
                 [-4.0, 15.0, 2.0],
-                [0.0, SPIDER_SPLAY * 2.0, -SPIDER_SPLAY],
+                [0.0, SPIDER_YAW * 2.0, -SPIDER_SPLAY],
                 &[cube([-15.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "left_hind_leg",
                 None,
                 [4.0, 15.0, 2.0],
-                [0.0, -SPIDER_SPLAY * 2.0, SPIDER_SPLAY],
+                [0.0, -SPIDER_YAW * 2.0, SPIDER_SPLAY],
                 &[cube([-1.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "right_middle_hind_leg",
                 None,
                 [-4.0, 15.0, 1.0],
-                [0.0, SPIDER_SPLAY, -SPIDER_SPLAY * 0.74],
+                [0.0, SPIDER_YAW, -SPIDER_SPLAY * 0.74],
                 &[cube([-15.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "left_middle_hind_leg",
                 None,
                 [4.0, 15.0, 1.0],
-                [0.0, -SPIDER_SPLAY, SPIDER_SPLAY * 0.74],
+                [0.0, -SPIDER_YAW, SPIDER_SPLAY * 0.74],
                 &[cube([-1.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "right_middle_front_leg",
                 None,
                 [-4.0, 15.0, 0.0],
-                [0.0, -SPIDER_SPLAY, -SPIDER_SPLAY * 0.74],
+                [0.0, -SPIDER_YAW, -SPIDER_SPLAY * 0.74],
                 &[cube([-15.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "left_middle_front_leg",
                 None,
                 [4.0, 15.0, 0.0],
-                [0.0, SPIDER_SPLAY, SPIDER_SPLAY * 0.74],
+                [0.0, SPIDER_YAW, SPIDER_SPLAY * 0.74],
                 &[cube([-1.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "right_front_leg",
                 None,
                 [-4.0, 15.0, -1.0],
-                [0.0, -SPIDER_SPLAY * 2.0, -SPIDER_SPLAY],
+                [0.0, -SPIDER_YAW * 2.0, -SPIDER_SPLAY],
                 &[cube([-15.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
             bone(
                 "left_front_leg",
                 None,
                 [4.0, 15.0, -1.0],
-                [0.0, SPIDER_SPLAY * 2.0, SPIDER_SPLAY],
+                [0.0, SPIDER_YAW * 2.0, SPIDER_SPLAY],
                 &[cube([-1.0, -1.0, -1.0], [16, 2, 2], [18, 0], 0.0, false)],
             ),
         ],
@@ -814,6 +811,132 @@ pub const TYPES_TABLE: &[EntityType] = &[
         ],
     },
 ];
+
+/// An affine place in model space: a rotation and the translation after it. The era's
+/// `ModelPart.render` applies a part's pivot, then its rotation, so a bone's place is
+/// `T(pivot) * R` and a box corner lands at `R * corner + pivot` in its parent's frame.
+#[derive(Clone, Copy)]
+struct Place {
+    rotation: [[f32; 3]; 3],
+    translation: [f32; 3],
+}
+
+impl Place {
+    const IDENTITY: Self = Self {
+        rotation: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        translation: [0.0; 3],
+    };
+
+    /// This place, then `next` inside it (`self * next`).
+    fn then(self, next: Self) -> Self {
+        let mut rotation = [[0.0; 3]; 3];
+        for (row, line) in rotation.iter_mut().enumerate() {
+            for (column, value) in line.iter_mut().enumerate() {
+                *value = (0..3)
+                    .map(|k| self.rotation[row][k] * next.rotation[k][column])
+                    .sum();
+            }
+        }
+        let translation = std::array::from_fn(|row| {
+            (0..3)
+                .map(|k| self.rotation[row][k] * next.translation[k])
+                .sum::<f32>()
+                + self.translation[row]
+        });
+        Self {
+            rotation,
+            translation,
+        }
+    }
+
+    fn point(self, point: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|row| {
+            (0..3)
+                .map(|k| self.rotation[row][k] * point[k])
+                .sum::<f32>()
+                + self.translation[row]
+        })
+    }
+}
+
+/// The rotation `ModelPart.render` applies for `rotation` (`rotationX`, `rotationY`,
+/// `rotationZ` in radians): `glRotatef` Z, then Y, then X, so `Rz * Ry * Rx`, the engine's
+/// `Quat::from_euler(EulerRot::ZYX, z, y, x)`.
+fn rotation_zyx([x, y, z]: [f32; 3]) -> [[f32; 3]; 3] {
+    let (sx, cx) = x.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let (sz, cz) = z.sin_cos();
+    [
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy, cy * sx, cy * cx],
+    ]
+}
+
+/// A bone's place under its parent: the era's `setPos` pivot, then its rest rotation.
+fn bone_place(bone: &Bone) -> Place {
+    Place {
+        rotation: rotation_zyx(bone.rotation),
+        translation: bone.pivot,
+    }
+}
+
+/// The chain from the model's root down to `bone`, every parent's place already composed.
+fn bone_place_in_model(model: &Model, bone: &Bone) -> Place {
+    let mut chain = vec![bone];
+    let mut current = bone;
+    while let Some(parent) = current.parent {
+        current = model
+            .bones
+            .iter()
+            .find(|bone| bone.name == parent)
+            .unwrap_or_else(|| panic!("{} names no parent {parent}", current.name));
+        chain.push(current);
+    }
+    chain.iter().rev().fold(Place::IDENTITY, |parent, bone| {
+        parent.then(bone_place(bone))
+    })
+}
+
+/// One box's low and high corner in model space: its own corners, taken through every
+/// ancestor's pivot and rotation and then its bone's, in the era's pixel units. A rotated
+/// box reports the bounds of its eight turned corners, as a renderer that culls it sees it.
+pub fn model_space_bounds(model: &Model, bone: &Bone, cube: &Cube) -> ([f32; 3], [f32; 3]) {
+    let place = bone_place_in_model(model, bone);
+    let grow = cube.inflate;
+    let mut min = [
+        cube.origin[0] - grow,
+        cube.origin[1] - grow,
+        cube.origin[2] - grow,
+    ];
+    let mut max = [
+        cube.origin[0] + cube.size[0] as f32 + grow,
+        cube.origin[1] + cube.size[1] as f32 + grow,
+        cube.origin[2] + cube.size[2] as f32 + grow,
+    ];
+    if cube.mirror {
+        std::mem::swap(&mut min[0], &mut max[0]);
+    }
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for corner in [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ] {
+        let placed = place.point(corner);
+        for (axis, value) in placed.iter().enumerate() {
+            low[axis] = low[axis].min(*value);
+            high[axis] = high[axis].max(*value);
+        }
+    }
+    (low, high)
+}
 
 /// Every covered era model, in table order.
 pub fn models() -> &'static [Model] {
@@ -1128,7 +1251,7 @@ mod tests {
         assert_eq!(bone(player, "right_arm").cubes[0].uv, [40, 16]);
         assert!(!bone(player, "right_arm").cubes[0].mirror);
         assert!(bone(player, "left_arm").cubes[0].mirror);
-        assert_eq!(bone(player, "left_leg").pivot, [1.9, 12.0, 0.1]);
+        assert_eq!(bone(player, "left_leg").pivot, [1.9, 12.0, 0.0]);
     }
 
     /// A zombie's sheet is 64x64, so the same head box lands on different pixels than a
@@ -1152,13 +1275,16 @@ mod tests {
         assert_eq!(skeleton.texture_size, [64, 32]);
     }
 
-    /// `CreeperModel`'s 4x6x4 legs sit at y=16, and its hat is the same 8x8x8 box grown 0.5.
+    /// `CreeperModel`'s 4x6x4 legs sit at y=16; its `hat` field is never rendered.
     #[test]
     fn the_creeper_has_four_short_legs_at_the_era_offsets() {
         let creeper = model("minecraft:creeper#main");
         assert_eq!(bone(creeper, "head").pivot, [0.0, 4.0, 0.0]);
         assert_eq!(bone(creeper, "head").cubes[0].size, [8, 8, 8]);
-        assert_eq!(bone(creeper, "hat").cubes[0].inflate, 0.5);
+        assert!(
+            creeper.bones.iter().all(|bone| bone.name != "hat"),
+            "CreeperModel.render draws no hat"
+        );
         assert_eq!(bone(creeper, "body").cubes[0].size, [8, 12, 4]);
         assert_eq!(bone(creeper, "left_hind_leg").pivot, [-2.0, 16.0, 4.0]);
         assert_eq!(bone(creeper, "right_front_leg").pivot, [2.0, 16.0, -4.0]);
@@ -1189,6 +1315,66 @@ mod tests {
         assert_eq!(bone(wool, "body").cubes[0].inflate, 1.75);
     }
 
+    /// A quarter turn is `cos(PI/2)` in `f32`, not exactly zero: compare a rotated box to
+    /// the era's numbers to a pixel's ten-thousandth.
+    fn assert_bounds(actual: ([f32; 3], [f32; 3]), expected: ([f32; 3], [f32; 3])) {
+        for (a, e) in actual
+            .0
+            .into_iter()
+            .zip(expected.0)
+            .chain(actual.1.into_iter().zip(expected.1))
+        {
+            assert!((a - e).abs() < 1.0e-4, "{actual:?} is not {expected:?}");
+        }
+    }
+
+    /// The era's boxes in model space: each part's pivot and rotation through the parent
+    /// chain. `QuadrupedModel`'s cow legs hang from y=12 to y=24 under the quarter-turned
+    /// body; the pig's head sits on y=12; the sheep's 6x6x8 head on y=6; the chicken's legs
+    /// start at y=19. These are the numbers `ModelPart.render` draws, not just `setPos`.
+    #[test]
+    fn the_quadruped_boxes_land_where_the_eras_pivots_put_them() {
+        let pig = model("minecraft:pig#main");
+        let head = bone(pig, "head");
+        assert_eq!(head.pivot, [0.0, 12.0, -6.0]);
+        assert_eq!(
+            model_space_bounds(pig, head, &head.cubes[0]),
+            ([-4.0, 8.0, -14.0], [4.0, 16.0, -6.0])
+        );
+
+        let cow = model("minecraft:cow#main");
+        let body = bone(cow, "body");
+        assert_eq!(body.rotation, LIE_DOWN);
+        // 12 wide, 8 tall and 16 long once the body lies along its pivot.
+        assert_bounds(
+            model_space_bounds(cow, body, &body.cubes[0]),
+            ([-6.0, 2.0, -8.0], [6.0, 12.0, 10.0]),
+        );
+        let leg = bone(cow, "right_front_leg");
+        assert_eq!(leg.pivot, [-4.0, 12.0, -6.0]);
+        assert_eq!(
+            model_space_bounds(cow, leg, &leg.cubes[0]),
+            ([-6.0, 12.0, -8.0], [-2.0, 24.0, -4.0])
+        );
+
+        let sheep = model("minecraft:sheep#main");
+        let head = bone(sheep, "head");
+        assert_eq!(head.cubes[0].size, [6, 6, 8]);
+        assert_eq!(head.pivot, [0.0, 6.0, -8.0]);
+        assert_eq!(
+            model_space_bounds(sheep, head, &head.cubes[0]),
+            ([-3.0, 2.0, -14.0], [3.0, 8.0, -6.0])
+        );
+
+        let chicken = model("minecraft:chicken#main");
+        let leg = bone(chicken, "right_leg");
+        assert_eq!(leg.pivot, [-2.0, 19.0, 1.0]);
+        assert_eq!(
+            model_space_bounds(chicken, leg, &leg.cubes[0]),
+            ([-3.0, 19.0, -2.0], [0.0, 24.0, 1.0])
+        );
+    }
+
     /// `ChickenModel`: the body is a 6x8x6 box lying down and the legs hang from y=19.
     #[test]
     fn the_chicken_is_the_eras_eight_part_model() {
@@ -1208,9 +1394,11 @@ mod tests {
         let leg = bone(spider, "right_front_leg");
         assert_eq!(leg.cubes[0].size, [16, 2, 2]);
         assert_eq!(leg.pivot, [-4.0, 15.0, -1.0]);
-        assert_eq!(leg.rotation[1], -SPIDER_SPLAY * 2.0);
+        // `var10 = PI/8` swings them out; the outer pair twice as far as the middle pair.
+        assert_eq!(leg.rotation[1], -SPIDER_YAW * 2.0);
         assert_eq!(leg.rotation[2], -SPIDER_SPLAY);
         let middle = bone(spider, "left_middle_hind_leg");
+        assert_eq!(middle.rotation[1], -SPIDER_YAW);
         assert_eq!(middle.rotation[2], SPIDER_SPLAY * 0.74);
     }
 

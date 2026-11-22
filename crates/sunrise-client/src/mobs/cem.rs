@@ -745,6 +745,11 @@ impl Legacy {
         own: &HashMap<String, (&str, &str, &EntityModel)>,
         layers: &mut HashMap<String, CemLayer>,
     ) {
+        // A 1.7.10 root's models are already built on the era's texture layout: the era's own
+        // `Model*` classes unwrap the same 64x32 sheets this conversion would halve again.
+        if crate::sunset17_assets::is_source(root) {
+            return;
+        }
         // `root` holds vanilla's files too, which never had the old names.
         let legacy: Vec<_> = self
             .textures
@@ -1100,6 +1105,34 @@ mod tests {
         let leg = get(&models.layer("cow#main").unwrap().model, "right_hind_leg");
         assert_eq!((leg.polygons.len(), leg.children.len()), (0, 1));
         assert!(models.layer("sheep#main").is_none());
+    }
+
+    /// A 1.7.10 root's models already unwrap the era's 64x32 sheets; the legacy conversion
+    /// must not build its halved layer for them (on an era root it dropped the pig's and
+    /// cow's legs and redrew their faces from the wrong texels).
+    #[test]
+    fn a_1_7_10_root_keeps_its_own_texture_layout() {
+        use sunrise_assets::resource_source::Resource;
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/minecraft/font/glyph_sizes.bin".into(),
+                Resource::bytes(Vec::new()),
+            ),
+            (
+                "assets/minecraft/textures/font/ascii.png".into(),
+                Resource::bytes(Vec::new()),
+            ),
+            (
+                "assets/minecraft/textures/entity/pig/pig.png".into(),
+                Resource::bytes(Vec::new()),
+            ),
+        ]));
+        let pig = Arc::new(plane("root", vec![plane("head", vec![])]));
+        let vanilla: HashMap<&str, (&Arc<Part>, &str)> = [("pig#main", (&pig, "minecraft:pig"))]
+            .into_iter()
+            .collect();
+        let (models, _) = CemModels::from_files(&source, &jem_files(&source), &vanilla);
+        assert!(models.layer("pig#main").is_none());
     }
 
     #[test]
