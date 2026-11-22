@@ -55,6 +55,9 @@ impl Renderer {
             self.follow_translucent_layout();
             self.follow_packed_layout();
         }
+        // The layer's own texture (the era's `clouds.png`), uploaded before the mesh samples it
+        // and before the world pass borrows the sections.
+        self.prepare_clouds(frame.clouds.as_ref().and_then(|input| input.image));
         // No world runs on a title or loading frame: the text's expression uniforms and
         // `PolyGlobals` are 0 there, whatever the game last gave them.
         if frame.title {
@@ -1487,6 +1490,7 @@ impl Renderer {
             .clouds
             .as_ref()
             .filter(|_| native_clouds && pack_cloud_quads.is_none());
+        let clouds_era = native_input.is_some_and(|input| input.era);
         let cloud_quads = if let Some(input) = native_input {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -3158,6 +3162,7 @@ impl Renderer {
                     let extras = oit::Extras {
                         water_mask: (water_mask_quads > 0).then_some(&mask as _),
                         clouds: (cloud_quads > 0).then_some(&clouds as _),
+                        clouds_era,
                         features: Some(&features),
                     };
                     // The draw closure below borrows all of `self`, so the timer is taken out.
@@ -3209,7 +3214,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.stage(self.own_timing.as_mut(), "OIT marks");
                     if cloud_quads > 0 && !pack_draws_clouds {
-                        self.mark_clouds(&mut pass, cloud_quads);
+                        self.mark_clouds(&mut pass, cloud_quads, clouds_era);
                     }
                     // HDR output's mark on what shines in the stages, as the classic
                     // pass marks it after drawing it: eyes, the dragon's eyes and rays,
@@ -3373,12 +3378,16 @@ impl Renderer {
             }
             if cloud_quads > 0 && !pack_draws_clouds && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "clouds");
-                pass.set_pipeline(&self.cloud_pipeline);
+                pass.set_pipeline(if clouds_era {
+                    &self.cloud_pipeline_era
+                } else {
+                    &self.cloud_pipeline
+                });
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.cloud_group, &[]);
                 pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
                 pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
-                self.mark_clouds(&mut pass, cloud_quads);
+                self.mark_clouds(&mut pass, cloud_quads, clouds_era);
             }
             // LevelRenderer.executeClassicTransparency: weather after translucent
             // terrain and clouds, so the water behind the rain is drawn first.

@@ -155,6 +155,8 @@ pub struct Extras<'a> {
     pub water_mask: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
     /// `CloudRenderer.renderOit`: draws the clouds with the pipeline given.
     pub clouds: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline)>,
+    /// The 1.7.10 layer: its own texture and no back-face culling, so the `*_era` pipelines.
+    pub clouds_era: bool,
     /// "Features, World Border, Weather": draws what the entity, weather and
     /// border shaders put after the opaque world, with `Oit::features`'s
     /// pipelines of the stage.
@@ -179,6 +181,7 @@ pub struct Oit {
     flat: Option<[wgpu::RenderPipeline; 3]>,
     features: Features,
     clouds: [wgpu::RenderPipeline; 3],
+    clouds_era: [wgpu::RenderPipeline; 3],
     cull: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     targets: Option<Targets>,
@@ -464,7 +467,7 @@ impl Oit {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &cloud_attributes,
         })];
-        let cloud_pipeline = |label, fragment, stage: Stage| {
+        let cloud_pipeline = |label, fragment, cull_mode, stage: Stage| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(
@@ -485,7 +488,7 @@ impl Oit {
                     buffers: &cloud_buffers,
                 },
                 primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode,
                     ..Default::default()
                 },
                 // `OIT_CLOUDS`: only the bounds stage writes the cloud depth,
@@ -505,20 +508,46 @@ impl Oit {
                 cache: None,
             })
         };
+        let culled = Some(wgpu::Face::Back);
         let cloud_pipelines = [
             cloud_pipeline(
                 "OIT cloud depth bounds",
                 "fs_oit_cloud_bounds",
+                culled,
                 Stage::DepthBounds,
             ),
             cloud_pipeline(
                 "OIT cloud transmittance",
                 "fs_oit_cloud_transmittance",
+                culled,
                 Stage::Transmittance,
             ),
             cloud_pipeline(
                 "OIT cloud accumulate",
                 "fs_oit_cloud_accumulate",
+                culled,
+                Stage::Accumulate,
+            ),
+        ];
+        // The era's layer: culling off and its own `clouds.png`, as `cloud_pipeline_era` draws
+        // it in the classic pass.
+        let cloud_pipelines_era = [
+            cloud_pipeline(
+                "OIT cloud depth bounds, two-sided",
+                "fs_oit_cloud_bounds_era",
+                None,
+                Stage::DepthBounds,
+            ),
+            cloud_pipeline(
+                "OIT cloud transmittance, two-sided",
+                "fs_oit_cloud_transmittance_era",
+                None,
+                Stage::Transmittance,
+            ),
+            cloud_pipeline(
+                "OIT cloud accumulate, two-sided",
+                "fs_oit_cloud_accumulate_era",
+                None,
                 Stage::Accumulate,
             ),
         ];
@@ -537,6 +566,7 @@ impl Oit {
             flat: flat_pipelines,
             features,
             clouds: cloud_pipelines,
+            clouds_era: cloud_pipelines_era,
             cull,
             composite,
             targets: None,
@@ -767,6 +797,7 @@ impl Oit {
                     depth,
                     (label, group, &then),
                     (clouds, cloud_depth),
+                    extras.clouds_era,
                     timing.as_deref_mut(),
                 );
             }
@@ -814,6 +845,7 @@ impl Oit {
             &dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
             &Depth,
         ),
+        era: bool,
         timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
         if stage == Stage::DepthBounds {
@@ -838,7 +870,8 @@ impl Oit {
             ..Default::default()
         });
         pass.set_bind_group(GROUP, group, &[]);
-        draw(&mut pass, &self.clouds[stage as usize]);
+        let pipelines = if era { &self.clouds_era } else { &self.clouds };
+        draw(&mut pass, &pipelines[stage as usize]);
     }
 
     /// `LevelRenderer.executeOitWaterMask`: the terrain's depth is the world's

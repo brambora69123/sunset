@@ -189,9 +189,21 @@ struct CloudInfo {
     colors: array<vec4<f32>, 4>,
 }
 @group(1) @binding(0) var<uniform> cloud: CloudInfo;
+// The layer's own texture (the era's `clouds.png`), or a white texel for a 26.3 root, whose
+// faces sample the shared atlas' white sprite instead.
+@group(1) @binding(1) var cloud_texture: texture_2d<f32>;
+@group(1) @binding(2) var cloud_sampler: sampler;
 @vertex fn vs_cloud(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
     return entity_vertex(position + cloud.offset.xyz, uv, overlay, cloud.colors[light.x], light, normal);
+}
+// clouds.fsh with the layer's own texture: its texel times the face's colour, faded towards
+// the cloud fog end. The 1.7.10 layer draws with culling off, so `front` picks the shade
+// `entity_color` gives a face's two sides.
+@fragment fn fs_cloud_era(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let texel = textureSample(cloud_texture, cloud_sampler, in.uv);
+    let color = texel * select(in.back_color, in.color, front);
+    return entity_written_color(in, vec4(color.rgb, color.a * cloud_fade(in.fog_distance.x)));
 }
 // rendertype_end_portal.fsh: the layer colours.
 const PORTAL_COLORS = array<vec3<f32>, 16>(

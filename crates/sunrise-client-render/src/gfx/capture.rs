@@ -170,7 +170,11 @@ pub struct RendererState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Clouds {
     pub texture: (u32, u32, Vec<bool>),
-    pub uv: [f32; 2],
+    /// The layer's own pixels (the era's `clouds.png`); a 26.3 root draws the white sprite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<(u32, u32, Vec<u8>)>,
+    /// The texture's rect the cells' texels map into.
+    pub uv: [f32; 4],
     pub camera: [f64; 3],
     pub time: i64,
     pub partial_tick: f64,
@@ -181,6 +185,9 @@ pub struct Clouds {
     /// default height.
     #[serde(default = "default_cloud_height")]
     pub height: f32,
+    /// The 1.7.10 layer: culling off and its own texture.
+    #[serde(default)]
+    pub era: bool,
 }
 
 impl Clouds {
@@ -188,6 +195,7 @@ impl Clouds {
     fn record(c: &crate::clouds::Input<'_>) -> Self {
         Self {
             texture: c.texture.clone(),
+            image: c.image.cloned(),
             uv: c.uv,
             camera: c.camera.to_array(),
             time: c.time,
@@ -196,6 +204,7 @@ impl Clouds {
             fast: c.fast,
             color: c.color,
             height: c.height,
+            era: c.era,
         }
     }
 
@@ -203,6 +212,7 @@ impl Clouds {
     fn input(&self) -> crate::clouds::Input<'_> {
         crate::clouds::Input {
             texture: &self.texture,
+            image: self.image.as_ref(),
             uv: self.uv,
             camera: DVec3::from_array(self.camera),
             time: self.time,
@@ -211,6 +221,7 @@ impl Clouds {
             fast: self.fast,
             color: self.color,
             height: self.height,
+            era: self.era,
         }
     }
 }

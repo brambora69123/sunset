@@ -2,7 +2,7 @@
 //! before the height was kept reads as `EnvironmentAttributes.CLOUD_HEIGHT`'s default, 192.33.
 use super::Clouds;
 
-const FIELDS: &str = r#""texture": [1, 1, [true]], "uv": [0.0, 0.0], "camera": [0.5, 64.0, 0.5],
+const FIELDS: &str = r#""texture": [1, 1, [true]], "uv": [0.0, 0.0, 1.0, 1.0], "camera": [0.5, 64.0, 0.5],
     "time": 0, "partial_tick": 0.0, "range": 2, "fast": false, "color": [1.0, 1.0, 1.0, 0.8]"#;
 
 #[test]
@@ -25,7 +25,8 @@ fn a_replay_draws_the_recorded_cloud_height() {
     let texture = (1, 1, vec![true]);
     let input = crate::clouds::Input {
         texture: &texture,
-        uv: [0.0; 2],
+        image: None,
+        uv: [0.0, 0.0, 1.0, 1.0],
         camera: glam::DVec3::new(0.5, 64.0, 0.5),
         time: 0,
         partial_tick: 0.0,
@@ -33,6 +34,7 @@ fn a_replay_draws_the_recorded_cloud_height() {
         fast: false,
         color: [1.0; 4],
         height: 250.0,
+        era: false,
     };
     let json = serde_json::to_string(&Clouds::record(&input)).unwrap();
     let clouds: Clouds = serde_json::from_str(&json).unwrap();

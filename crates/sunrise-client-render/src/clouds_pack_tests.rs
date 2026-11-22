@@ -10,7 +10,8 @@ use super::*;
 fn input(texture: &(u32, u32, Vec<bool>), above: f64, range: i32, fast: bool) -> Input<'_> {
     Input {
         texture,
-        uv: [0.0; 2],
+        image: None,
+        uv: [0.0, 0.0, 1.0, 1.0],
         // Vanilla's height is a float, and it adds 3.9600000381469727 to z: the camera at x 0,
         // z -3.9600000381469727 sits at the corner of cell 0, 0, `above` the layer's bottom.
         camera: glam::DVec3::new(
@@ -24,6 +25,7 @@ fn input(texture: &(u32, u32, Vec<bool>), above: f64, range: i32, fast: bool) ->
         fast,
         color: [1.0, 1.0, 1.0, 0.8],
         height: CLOUD_HEIGHT,
+        era: false,
     }
 }
 
@@ -212,7 +214,8 @@ fn the_faces_key_holds_only_while_the_faces_do() {
         let t = f64::from(step);
         let input = Input {
             texture: &texture,
-            uv: [0.5; 2],
+            image: None,
+            uv: [0.0, 0.0, 1.0, 1.0],
             camera: glam::DVec3::new(
                 t * 0.37,
                 f64::from(CLOUD_HEIGHT) - 6.0 + (t * 0.05) % 14.0,
@@ -224,6 +227,7 @@ fn the_faces_key_holds_only_while_the_faces_do() {
             fast: false,
             color: [1.0; 4],
             height: CLOUD_HEIGHT,
+            era: false,
         };
         let key = faces_key(&input);
         let faces = faces(&input);
@@ -508,7 +512,8 @@ fn java_input<'a>(
     let channel = |shift: u32| ((argb >> shift) & 0xFF) as f32 / 255.0;
     Input {
         texture,
-        uv: [0.0; 2],
+        image: None,
+        uv: [0.0, 0.0, 1.0, 1.0],
         camera: glam::DVec3::from_array(camera),
         time,
         partial_tick: partial,
@@ -516,6 +521,7 @@ fn java_input<'a>(
         fast: !fancy,
         color: [channel(16), channel(8), channel(0), channel(24)],
         height,
+        era: false,
     }
 }
 

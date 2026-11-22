@@ -833,6 +833,9 @@ pub struct PackResources {
     names: Arc<Names>,
     /// clouds.png: (width, height, filled cells).
     clouds: Arc<(u32, u32, Vec<bool>)>,
+    /// The 1.7.10 clouds.png's own pixels (width, height, RGBA), which the era's layer draws
+    /// from its own texture binding; none for a 26.3 root, whose faces sample the white sprite.
+    cloud_image: Option<Arc<(u32, u32, Vec<u8>)>>,
     /// misc/forcefield.png: (width, height, RGBA) for the world border wall.
     forcefield: Arc<(u32, u32, Vec<u8>)>,
     /// Custom sky layers (OptiFine's `optifine/sky`) with their textures; none without them.
@@ -8959,6 +8962,8 @@ impl Game<'_> {
         let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let shadow_only = std::mem::take(self.shadow_only_vertices.get_mut());
         let skin = std::mem::take(self.skin_frame.get_mut());
+        // The era's layer draws its own `clouds.png` at the era's height and range.
+        let era_clouds = self.era_ui();
         let frame = Frame {
             weather: &weather,
             weather_time: sunrise_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -9028,14 +9033,27 @@ impl Game<'_> {
             .flatten()
             .map(|white| sunrise_client::clouds::Input {
                 texture: &self.pack.clouds,
-                uv: [(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0],
+                image: self.pack.cloud_image.as_deref(),
+                // The era draws its own `clouds.png` whole; a 26.3 root fills with the
+                // atlas's white sprite.
+                uv: if era_clouds {
+                    [0.0, 0.0, 1.0, 1.0]
+                } else {
+                    [white.u0, white.v0, white.u1, white.v1]
+                },
                 camera,
                 time: self.world.game_time,
                 partial_tick: alpha,
-                range: self.settings.cloud_range,
+                // 1.7.10 draws its layer out to the render distance, not a cloud distance.
+                range: if era_clouds {
+                    self.streaming.radius
+                } else {
+                    self.settings.cloud_range
+                },
                 fast: self.settings.clouds == "fast",
                 color: sky.cloud_color,
                 height: sky.cloud_height,
+                era: era_clouds,
             }),
             entities: &entities,
             static_block_entities: &static_block_entities,

@@ -1206,15 +1206,33 @@ impl Renderer {
         });
         let cloud_bindings = kept.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cloud bindings"),
-            entries: &[entry(
-                0,
-                wgpu::ShaderStages::VERTEX,
-                wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-            )],
+            entries: &[
+                entry(
+                    0,
+                    wgpu::ShaderStages::VERTEX,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                // The layer's own texture (`clouds::Input::image`): the era's `clouds.png`,
+                // where a 26.3 root's white sprite comes from the shared atlas.
+                entry(
+                    1,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    2,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+            ],
         });
         let cloud_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cloud transforms and colors"),
@@ -1222,13 +1240,52 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Vanilla's cloud texture is nearest and unmipped; the group starts on a white texel for
+        // a 26.3 root, whose faces sample the atlas' white sprite, and `Renderer::prepare_clouds`
+        // swaps in the era's image.
+        let cloud_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Cloud texture"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let cloud_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("White cloud texel"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[255; 4],
+        );
+        let cloud_texture = cloud_texture.create_view(&Default::default());
         let cloud_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cloud resources"),
             layout: &cloud_bindings,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: cloud_uniform.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cloud_uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&cloud_texture),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&cloud_sampler),
+                },
+            ],
         });
         let cloud_layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cloud layout"),
@@ -1358,9 +1415,35 @@ impl Renderer {
             alpha_blend,
             true,
         );
+        // `WorldRenderer.renderClouds` disables culling: the 1.7.10 layer draws its own
+        // `clouds.png` and its outer faces are visible from inside the 4-block body.
+        let cloud_pipeline_era = entity_pipeline_with(EntityPipelineOptions {
+            label: "Clouds, two-sided",
+            cull_mode: None,
+            depth_write: true,
+            compare: wgpu::CompareFunction::GreaterEqual,
+            bias: Default::default(),
+            blend: alpha_blend,
+            clouds: true,
+            vertex: "vs_cloud",
+            fragment: "fs_cloud_era",
+            write_mask: wgpu::ColorWrites::ALL,
+        });
         let hdr_cloud_mark_pipeline = entity_pipeline_with(EntityPipelineOptions {
             label: "HDR cloud mark",
             cull_mode: Some(wgpu::Face::Back),
+            depth_write: false,
+            compare: wgpu::CompareFunction::GreaterEqual,
+            bias: Default::default(),
+            blend: wgpu::BlendState::REPLACE,
+            clouds: true,
+            vertex: "vs_entity",
+            fragment: "fs_hdr_cloud_mark",
+            write_mask: wgpu::ColorWrites::ALPHA,
+        });
+        let hdr_cloud_mark_pipeline_era = entity_pipeline_with(EntityPipelineOptions {
+            label: "HDR cloud mark, two-sided",
+            cull_mode: None,
             depth_write: false,
             compare: wgpu::CompareFunction::GreaterEqual,
             bias: Default::default(),
@@ -2272,12 +2355,16 @@ impl Renderer {
             translucent_item_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
+            cloud_pipeline_era,
             hdr_cloud_mark_pipeline,
+            hdr_cloud_mark_pipeline_era,
             cloud_mesh: Default::default(),
             cloud_buffer,
             cloud_capacity: 4,
             cloud_uniform,
             cloud_group,
+            cloud_sampler,
+            cloud_image: None,
             additive_pipeline,
             dragon_rays_pipeline,
             energy_swirl_pipeline,

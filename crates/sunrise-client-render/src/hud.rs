@@ -1301,8 +1301,6 @@ impl HudAtlas {
         if root.profile() == sunrise_core::profile::Profile::V1_7_10 {
             return Self::build_1_7_10(root, defaults);
         }
-        // A reload back to a 26.3 root drops the era's cloud texture.
-        crate::clouds::set_era_texture(None);
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
@@ -1314,11 +1312,11 @@ impl HudAtlas {
         Ok(atlas)
     }
     /// The GUI atlas of a 1.7.10 resource root: the era's `textures/gui` screens,
-    /// `textures/font` sheets, `textures/environment` sky (sun, moon phases, clouds and the
-    /// End sky), the `textures/entity` sheets the mob pass reads and the era's block and item
-    /// icons (`textures/blocks`, `textures/items`), packed into the same atlas the HUD draws
-    /// from. Its screens are looked up by their era path (`blit_rect("gui/icons")`), its item
-    /// icons by theirs (`items/stick`, `blocks/stone`), and the font is the bitmap one
+    /// `textures/font` sheets, `textures/environment` sky (sun, moon phases and the End sky),
+    /// the `textures/entity` sheets the mob pass reads and the era's block and item icons
+    /// (`textures/blocks`, `textures/items`), packed into the same atlas the HUD draws from.
+    /// Its screens are looked up by their era path (`blit_rect("gui/icons")`), its item icons
+    /// by theirs (`items/stick`, `blocks/stone`), and the font is the bitmap one
     /// ([`crate::font::Font`] reads `ascii.png`, the unicode pages and `glyph_sizes.bin`).
     pub fn build_1_7_10(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         let mut atlas = Self::pack(
@@ -1363,16 +1361,10 @@ impl HudAtlas {
                 );
             }
         }
-        let clouds = atlas
-            .sprites
-            .get("environment/clouds")
-            .map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        crate::clouds::set_era_texture(clouds);
         log::info!(
-            "Sunrise: 1.7.10 sky sprites: sun {}, moon phases {}, clouds {}",
+            "Sunrise: 1.7.10 sky sprites: sun {}, moon phases {}",
             atlas.sprites.contains_key("environment/sun"),
-            atlas.sprites.contains_key("environment/moon_phases"),
-            clouds.is_some()
+            atlas.sprites.contains_key("environment/moon_phases")
         );
         pack_text::load_shaders(&mut atlas, root, root);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
@@ -1661,6 +1653,9 @@ impl HudAtlas {
             }
         }
         files.retain(|p| !menu_pictures::menu_picture_only(p));
+        // The cloud texture is not an atlas sprite: its own binding samples it (`clouds::load`
+        // masks its cells, `clouds::load_image` gives the era its pixels).
+        files.retain(|p| p != crate::clouds::TEXTURE);
         // OptiFine random entity variants, under the names their scan gives them (those
         // outside `textures/` are `<ns>:optifine/random/...`).
         let random_textures = if folders.contains(&"entity") {

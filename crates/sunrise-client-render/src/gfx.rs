@@ -482,12 +482,19 @@ pub struct Renderer {
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
+    /// The era's layer: culling off and its own `clouds.png` (`WorldRenderer.renderClouds`).
+    cloud_pipeline_era: wgpu::RenderPipeline,
     hdr_cloud_mark_pipeline: wgpu::RenderPipeline,
+    hdr_cloud_mark_pipeline_era: wgpu::RenderPipeline,
     cloud_mesh: crate::clouds::Mesh,
     cloud_buffer: wgpu::Buffer,
     cloud_capacity: u64,
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
+    cloud_sampler: wgpu::Sampler,
+    /// The era cloud image `cloud_group` binds, by its address, length and size: the image's
+    /// pointer stays put until a resource reload replaces it (with the renderer).
+    cloud_image: Option<(usize, usize, u32, u32)>,
     additive_pipeline: wgpu::RenderPipeline,
     dragon_rays_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.ENERGY_SWIRL`: additive, unlit, the sprite repeated within itself.
@@ -1047,19 +1054,74 @@ fn on_off(on: bool) -> &'static str {
 impl Renderer {
     /// The first-person hand's quads, which follow `first` quads of the entity buffer.
     /// Unmarks the clouds just drawn (`fs_hdr_cloud_mark`).
-    fn mark_clouds(&self, pass: &mut wgpu::RenderPass<'_>, quads: u32) {
+    fn mark_clouds(&self, pass: &mut wgpu::RenderPass<'_>, quads: u32, era: bool) {
         if !light_marks(self.output.frame.format, self.hdr.is_some())
             || self.hdr.as_ref().is_none_or(|h| !h.lighting)
         {
             return;
         }
-        pass.set_pipeline(&self.hdr_cloud_mark_pipeline);
+        pass.set_pipeline(if era {
+            &self.hdr_cloud_mark_pipeline_era
+        } else {
+            &self.hdr_cloud_mark_pipeline
+        });
         pass.set_bind_group(0, &self.entity_group, &[]);
         pass.set_bind_group(1, &self.cloud_group, &[]);
         pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..quads * 6, 0, 0..1);
         pass.set_bind_group(0, &self.group, &[]);
+    }
+    /// Binds the frame's own cloud texture (`clouds::Input::image`) in the cloud group: the era's
+    /// `clouds.png`, uploaded when a reload replaces it. A 26.3 root has none and keeps the white
+    /// texel the group was made with; a renderer is either root's for its whole life.
+    fn prepare_clouds(&mut self, image: Option<&(u32, u32, Vec<u8>)>) {
+        let Some((width, height, pixels)) = image else {
+            return;
+        };
+        let key = (pixels.as_ptr() as usize, pixels.len(), *width, *height);
+        if self.cloud_image == Some(key) {
+            return;
+        }
+        let texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Cloud texture"),
+                size: wgpu::Extent3d {
+                    width: *width,
+                    height: *height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            pixels,
+        );
+        let view = texture.create_view(&Default::default());
+        self.cloud_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cloud resources"),
+            layout: &self.cloud_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.cloud_uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.cloud_sampler),
+                },
+            ],
+        });
+        self.cloud_image = Some(key);
     }
     /// Unmarks translucent terrain, over the draws that just blended it (`fs_translucent_mark`).
     fn mark_translucent_terrain(

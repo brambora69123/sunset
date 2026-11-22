@@ -324,7 +324,14 @@ impl PackResources {
                     Names::load_for(root.source(), assets.profile)
                 });
                 let clouds = named_scope(scope, "pack.clouds", || {
-                    sunrise_client::clouds::load(root.source())
+                    (
+                        sunrise_client::clouds::load(root.source()),
+                        // The era's layer samples the sheet's own pixels, where 26.3's only
+                        // masks its white cells.
+                        (assets.profile == sunrise_core::profile::Profile::V1_7_10)
+                            .then(|| sunrise_client::clouds::load_image(root.source()))
+                            .flatten(),
+                    )
                 });
                 let forcefield =
                     named_scope(scope, "pack.forcefield", || load_forcefield(root.source()));
@@ -345,6 +352,7 @@ impl PackResources {
                     particles.join().unwrap(),
                 )
             });
+        let (clouds, cloud_image) = clouds;
         let clouds = clouds.map_err(|e| e.to_string())?;
         let polytone_post = sunrise_client::polytone_post::PolytonePost::read(
             root.source(),
@@ -380,6 +388,7 @@ impl PackResources {
             mod_layers: root.mod_layers().clone(),
             names: Arc::new(names),
             clouds: Arc::new(clouds),
+            cloud_image: cloud_image.map(Arc::new),
             forcefield: Arc::new(forcefield),
             custom_sky,
             environments,
