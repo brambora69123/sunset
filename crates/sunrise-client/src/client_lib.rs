@@ -32,7 +32,7 @@ pub use sunrise_client_render::{
     environment, extras, fast_hash, fluid_models, fluid_render, fog, font, gfx, graphics,
     graphics_style, graphics_ui, hdr_calibration, hud, hud_1_7_10, hud_kit, hud_layout,
     hud_overlays, inventory_effects, java_text, jigsaw_block, json_folder, level_loading, light,
-    lod, logging, mark_sprite, menu_blur, menu_style, mesher, mipmap, mod_browser,
+    lod, logging, mark_sprite, menu_blur, menu_style, menus_1_7_10, mesher, mipmap, mod_browser,
     mod_chunk_tickets, mod_list, mod_pipelines, model_library, models, mods_screen, monitor,
     multiline_edit, native_emissive, options_file, options_fixes, options_ui, overlay,
     pack_browser, pack_formats, pack_hooks, pack_palette, pack_screen, packs, pad_cursor,

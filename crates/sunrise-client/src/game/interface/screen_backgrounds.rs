@@ -89,6 +89,8 @@ impl Game<'_> {
     /// `Screen.extractBlurredBackground` over the panorama or the world and
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
     pub(super) fn menu_blur(&self) -> Option<f32> {
+        // 1.7.10 dims the world behind a screen and blurs nothing.
+        let era_screen = self.era_ui() && (self.screen == Screen::Paused || self.era_menu_open());
         let blurred = self.remote_loading()
             || self.title.as_ref().is_some_and(|t| {
                 matches!(self.screen, Screen::Options | Screen::Win)
@@ -96,7 +98,7 @@ impl Game<'_> {
             })
             || (self.title.is_none()
                 && self.player.is_some()
-                && (self.screen.blurs_background(self.pause_menu)
+                && ((self.screen.blurs_background(self.pause_menu) && !era_screen)
                     || self.dialog_open()
                     || (self.screen == Screen::Win && self.win_screen_pauses())))
             || self.screen_blur_requested.get();

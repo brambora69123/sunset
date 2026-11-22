@@ -1,7 +1,9 @@
 //! The era UI's wiring: the engine menu slot each of the era's slots stands
 //! for. The painters' own layouts are pinned by their crate's tests; the
 //! content root's profile picks the painter (`Game::era_ui`).
+use super::era_menus::era_focus_step;
 use super::era_ui::{era_engine_slot, era_slot_position};
+use sunrise_client::menus_1_7_10::Action17;
 use sunrise_client::screens_1_7_10::{Screen17, Slot17};
 
 /// The engine's menu ids for the era's slot names, as `slots()` builds them:
@@ -124,4 +126,38 @@ fn era_hit_rectangles_are_the_painters_slot_table() {
         era_slot_position(Screen17::Furnace, 302),
         Some((116.0, 35.0))
     );
+}
+
+/// Tab and the arrows walk the era page's widgets in the order they were
+/// laid out, wrap at both ends, and start over when the focus names a widget
+/// the page no longer has (`Screen.setInitialFocus`).
+#[test]
+fn a_focus_step_walks_the_pages_widgets_and_wraps() {
+    let widgets = [Action17::BackToGame, Action17::OpenOptions];
+    assert_eq!(
+        era_focus_step(&widgets, None, true),
+        Some(Action17::BackToGame)
+    );
+    assert_eq!(
+        era_focus_step(&widgets, None, false),
+        Some(Action17::OpenOptions)
+    );
+    assert_eq!(
+        era_focus_step(&widgets, Some(Action17::BackToGame), true),
+        Some(Action17::OpenOptions)
+    );
+    assert_eq!(
+        era_focus_step(&widgets, Some(Action17::OpenOptions), true),
+        Some(Action17::BackToGame),
+        "the last widget wraps to the first"
+    );
+    assert_eq!(
+        era_focus_step(&widgets, Some(Action17::OpenOptions), false),
+        Some(Action17::BackToGame)
+    );
+    assert_eq!(
+        era_focus_step(&widgets, Some(Action17::Statistics), true),
+        Some(Action17::BackToGame)
+    );
+    assert_eq!(era_focus_step(&[], None, true), None);
 }

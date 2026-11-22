@@ -381,6 +381,9 @@ impl Game<'_> {
         }
     }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
+        if self.era_ui() {
+            return self.draw_era_pause_menu(batch);
+        }
         let friends = self.friends_shown();
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
@@ -546,6 +549,9 @@ impl Game<'_> {
             .map(|(i, page)| (page.title(), ADDED_PAGES + i as u8))
     }
     pub(super) fn pause_click(&mut self) -> Result<()> {
+        if self.era_ui() {
+            return self.era_pause_click();
+        }
         let (w, h) = {
             let size = self
                 .renderer
@@ -595,6 +601,9 @@ impl Game<'_> {
         Ok(())
     }
     pub(super) fn pause_key(&mut self, key: KeyCode) -> Result<()> {
+        if self.era_ui() {
+            return self.era_pause_key(key);
+        }
         let (w, h) = {
             let size = self
                 .renderer

@@ -85,6 +85,7 @@ pub mod logging;
 pub mod mark_sprite;
 pub mod menu_blur;
 pub mod menu_style;
+pub mod menus_1_7_10;
 pub mod mesher;
 pub mod mipmap;
 pub mod mod_animations;

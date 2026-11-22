@@ -1261,6 +1261,8 @@ struct Game<'a> {
     health_hud: hud_layout::HealthHud,
     /// `GameGui.prevHealth` for the era HUD's hurt flash.
     era_hud: era_ui::EraHud,
+    /// 1.7.10's pause menu and Options pages (`era_menus`).
+    era_menus: era_menus::EraMenus,
     /// What ends the game with an error; kept as it is, so main can tell a debug crash.
     error: Option<Box<dyn std::error::Error>>,
     message: Option<(String, Instant)>,
@@ -10861,7 +10863,8 @@ impl<'a> Game<'a> {
             )
         })?;
         let world = Game::world_for_mods(res.facts().air, 0);
-        let tutorial = tutorial::Tutorial::new(tutorial::Step::from_option(
+        let tutorial = tutorial::Tutorial::new(tutorial::Step::for_root(
+            pack.profile,
             settings.file.int("tutorialStep"),
         ));
         let creative = options.creative;
@@ -11027,6 +11030,7 @@ impl<'a> Game<'a> {
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             era_hud: era_ui::EraHud::default(),
+            era_menus: era_menus::EraMenus::default(),
             started: now,
             spectator_gui: Default::default(),
             previous: now,

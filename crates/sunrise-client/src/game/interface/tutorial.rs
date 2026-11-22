@@ -12,6 +12,16 @@ pub(super) enum Step {
 }
 
 impl Step {
+    /// The step a content root starts at. 1.7.10 has no tutorial, so an era
+    /// root starts at none whatever `options.txt` remembers.
+    pub(super) fn for_root(profile: sunrise_core::profile::Profile, value: i32) -> Self {
+        if profile == sunrise_core::profile::Profile::V1_7_10 {
+            Self::None
+        } else {
+            Self::from_option(value)
+        }
+    }
+
     pub(super) fn from_option(value: i32) -> Self {
         match value {
             0 => Self::Movement,
@@ -192,7 +202,10 @@ impl super::Game<'_> {
 
 impl super::Game<'_> {
     pub(super) fn reset_tutorial(&mut self) {
-        self.tutorial = Tutorial::new(Step::from_option(self.settings.file.int("tutorialStep")));
+        self.tutorial = Tutorial::new(Step::for_root(
+            self.pack.profile,
+            self.settings.file.int("tutorialStep"),
+        ));
         self.tutorial_toasts.clear();
     }
 
@@ -635,6 +648,16 @@ fn social_hint_progress(fully_visible_ms: i64) -> (bool, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_modern_root_starts_the_tutorial() {
+        use sunrise_core::profile::Profile;
+        assert_eq!(Step::for_root(Profile::V1_7_10, 0), Step::None);
+        assert_eq!(Step::for_root(Profile::V1_7_10, 2), Step::None);
+        assert_eq!(Step::for_root(Profile::Modern, 0), Step::Movement);
+        assert_eq!(Step::for_root(Profile::Modern, 4), Step::CraftPlanks);
+        assert_eq!(Step::for_root(Profile::Modern, 5), Step::None);
+    }
 
     #[test]
     fn social_hint_fills_for_eight_seconds_before_hiding() {

@@ -120,7 +120,6 @@ impl Game<'_> {
     /// were opened: the recipe book's settings, World Options, the title or
     /// the pause menu.
     pub(super) fn leave_options(&mut self) {
-        let to_game = self.options_from_title;
         let back = if let Some(screen) = self.panel.recipes_settings_return.take() {
             screen
         } else if std::mem::take(&mut self.options_to_world_options) {
@@ -130,12 +129,21 @@ impl Game<'_> {
         } else {
             Screen::Paused
         };
+        self.close_options_to(back);
+    }
+    /// `Screen.keyPressed`'s Escape: 1.7.10's options screens have no
+    /// `keyPressed` of their own, so the base screen closes them to the game.
+    pub(super) fn close_options_to_game(&mut self) {
+        self.close_options_to(Screen::Playing);
+    }
+    fn close_options_to(&mut self, back: Screen) {
+        self.era_menus.close();
         self.set_screen(back);
         // Vanilla grabs only on `setScreen(null)`: back on the title, which
         // is still shown, the pointer stays free (#1999). The startup handoff
         // can enter a world while its options are open, and closing them then
         // returns to that world, as `capture_loaded_world` grabs.
-        if to_game && self.title.is_none() {
+        if back == Screen::Playing && self.title.is_none() {
             self.capture(true);
         }
         self.dragging = false;
@@ -147,6 +155,8 @@ impl Game<'_> {
         self.open_options_at(from_title, Page::Main);
     }
     pub(super) fn open_options_at(&mut self, from_title: bool, page: Page) {
+        // The era's own pages are only ever opened from its pause menu.
+        self.era_menus.close();
         // Gameplay keys must not stay held behind the options screen, where
         // bindings can also change before the physical key is released.
         self.keys.clear();
@@ -203,6 +213,9 @@ impl Game<'_> {
         }
     }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
+        if self.era_menu_open() {
+            return self.draw_era_options_menu(batch);
+        }
         self.watch_pack_folder();
         let context = self.controller_settings_context();
         if self.ui.options.controller_open() {
@@ -275,6 +288,9 @@ impl Game<'_> {
         }
     }
     pub(super) fn options_mouse(&mut self, pressed: bool, right: bool) -> Result<()> {
+        if self.era_menu_open() {
+            return self.era_options_mouse(pressed, right);
+        }
         if !pressed {
             if right {
                 return Ok(());
@@ -306,6 +322,9 @@ impl Game<'_> {
         self.handle_option_events(events)
     }
     pub(super) fn options_drag(&mut self) -> Result<()> {
+        if self.era_menu_open() {
+            return self.era_options_drag();
+        }
         let size = self.gui_size();
         let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
             [r.config.width as i32, r.config.height as i32]
@@ -325,6 +344,9 @@ impl Game<'_> {
         self.handle_option_events(events)
     }
     pub(super) fn options_key(&mut self, key: KeyCode, text: Option<&str>) -> Result<()> {
+        if self.era_menu_open() {
+            return self.era_options_key(key);
+        }
         let size = self.gui_size();
         let shift = self.has_shift_down();
         let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
@@ -348,6 +370,9 @@ impl Game<'_> {
             .shortcut(&self.gui.atlas, shortcut, &mut self.clipboard)
     }
     pub(super) fn options_scroll(&mut self, amount: f32) -> Result<()> {
+        if self.era_menu_open() {
+            return self.era_options_scroll(amount);
+        }
         if self.pad_stick_scroll() {
             let size = self.gui_size();
             self.ui
@@ -374,9 +399,12 @@ impl Game<'_> {
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
-        self.ui.options.selected_key.is_some()
+        self.era_menus.waiting_for_key() || self.ui.options.selected_key.is_some()
     }
     pub(super) fn options_bind_mouse(&mut self, button: MouseButton) -> Result<()> {
+        if self.era_menu_open() {
+            return self.era_bind_mouse(button);
+        }
         self.ui.options.modifiers = self.modifiers().bits;
         let events = self.ui.options.bind_mouse(&mut self.settings, button);
         self.handle_option_events(events)
@@ -545,7 +573,20 @@ impl Game<'_> {
     }
     /// LanguageManager.setSelected + reload: translations, then re-wrap chat.
     pub(super) fn load_language(&mut self, code: &str) {
-        lang::set(lang::Language::load(&[&self.pack.source], code));
+        if self.era_ui() {
+            // 1.7.10's LanguageManager reads its one `en_US.lang`, never
+            // 26.3's JSON pages.
+            match sunrise_client::sunset17_assets::Assets::load(&self.vanilla_root())
+                .and_then(|era| era.language())
+            {
+                Ok(language) => lang::set(language),
+                Err(error) => {
+                    log::warn!("Sunrise: 1.7.10's en_US.lang was not loaded ({error})")
+                }
+            }
+        } else {
+            lang::set(lang::Language::load(&[&self.pack.source], code));
+        }
         self.refresh_remote_language();
         self.ui.chat.rescale(&self.gui.atlas);
         self.creative_screen.forget_items();

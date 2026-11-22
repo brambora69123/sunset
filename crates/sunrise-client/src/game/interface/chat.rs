@@ -2676,7 +2676,11 @@ mod tests {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join(crate::sunset17_assets::MANIFEST), "{}").unwrap();
+        std::fs::write(
+            root.join(crate::sunset17_assets::MANIFEST),
+            r#"{"minecraft":"1.7.10"}"#,
+        )
+        .unwrap();
         let ids = resource_ids(&root);
         assert!(ids.timelines.is_empty());
         let markers: Vec<_> = ids
